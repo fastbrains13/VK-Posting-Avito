@@ -40,7 +40,8 @@ prompt_secret ADMIN_PASSWORD "Новый пароль админки"
 prompt_secret VK_ACCESS_TOKEN "VK access token"
 prompt VK_GROUP_ID "ID или короткий адрес сообщества VK (пусто — не менять)"
 prompt VK_APP_ID "VK App ID (пусто — не менять)"
-export AVITO_URL ADMIN_USERNAME ADMIN_PASSWORD VK_ACCESS_TOKEN VK_GROUP_ID VK_APP_ID
+prompt DOMAIN "Домен админки (например admin.example.com; пусто — SSH-туннель)"
+export AVITO_URL ADMIN_USERNAME ADMIN_PASSWORD VK_ACCESS_TOKEN VK_GROUP_ID VK_APP_ID DOMAIN
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates docker.io docker-compose-v2
@@ -61,6 +62,7 @@ chmod 600 .env
 
 python3 - <<'PY'
 import os
+import re
 import secrets
 from pathlib import Path
 
@@ -104,9 +106,20 @@ for key, value in updates.items():
     if key not in found:
         result.append(f"{key}={value}")
 path.write_text("\n".join(result) + "\n", encoding="utf-8")
+
+# Caddy сам запросит и обновит TLS-сертификат, когда домен указывает на этот сервер.
+domain = os.environ.get("DOMAIN", "").strip().lower().rstrip(".")
+if domain:
+    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    if len(domain) > 253 or not re.fullmatch(rf"{label}(?:\.{label})+", domain):
+        raise SystemExit("Некорректный домен. Введите FQDN, например admin.example.com, без https:// и пути.")
+    Path("Caddyfile").write_text(
+        f"{domain} {{\n    encode gzip\n    reverse_proxy webui:8000\n}}\n",
+        encoding="utf-8",
+    )
 PY
 
-# Не публикуем панель на всех сетевых интерфейсах: вход через SSH-туннель.
+# Не публикуем саму админку на всех интерфейсах; доменный доступ идёт через Caddy.
 python3 - <<'PY'
 from pathlib import Path
 
@@ -121,7 +134,12 @@ elif local not in text:
 path.write_text(text, encoding="utf-8")
 PY
 
-docker compose up -d --build
+if [[ -n "${DOMAIN//[[:space:]]/}" ]]; then
+  docker compose --profile domain up -d --build
+else
+  docker compose stop caddy >/dev/null 2>&1 || true
+  docker compose up -d --build
+fi
 
 echo
 docker compose ps
@@ -129,8 +147,13 @@ echo
 echo "Последние логи:"
 docker compose logs --tail=30 webui
 echo
-echo "Установка завершена. Админка доступна только через SSH-туннель."
-echo "На своём компьютере выполните:"
-echo "ssh -N -L 8000:127.0.0.1:8000 USER@SERVER_IP"
-echo "Затем откройте http://localhost:8000"
+if [[ -n "${DOMAIN//[[:space:]]/}" ]]; then
+  echo "Установка завершена. Админка: https://${DOMAIN}"
+  echo "Проверьте, что DNS-запись A/AAAA домена указывает на сервер и входящие порты 80/443 открыты в firewall и панели провайдера."
+else
+  echo "Установка завершена. Админка доступна только через SSH-туннель."
+  echo "На своём компьютере выполните:"
+  echo "ssh -N -L 8000:127.0.0.1:8000 USER@SERVER_IP"
+  echo "Затем откройте http://localhost:8000"
+fi
 echo "Для постинга с фото проверьте токен и переключатель «Только посты с фото» в разделе VK-канал."
