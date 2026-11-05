@@ -1,0 +1,29 @@
+# =========================================================
+# Оркестрация Avito Parser + VK Publisher
+# Сервис: webui — админка; крон (парсинг источников → постинг в VK) живёт внутри неё,
+# отдельный worker-контейнер не нужен: на 1 CPU/1 ГБ он только спорит с вебом за память.
+# =========================================================
+
+services:
+  webui:
+    build: .
+    container_name: avito_webui
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - HEADLESS_MODE=true
+      - DB_PATH=data/avito.db
+      - PHOTOS_DIR=data/photos
+      - LOG_FILE=logs/avito_parser.log
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: python webui.py --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

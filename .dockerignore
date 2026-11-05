@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# IDE / OS
+.git/
+.idea/
+.vscode/
+.DS_Store
+
+# Данные и логи — остаются на хосте через volume
+data/
+logs/
+*.log
+*.db
+*.sqlite*
+
+# Секреты — не копируем в образ
+.env
+
+# Прочее
+tests/
+*.md

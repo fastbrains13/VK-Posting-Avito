@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вход — Админка Авито → VK</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--surface:#111111;--raised:#2a2a2a;--rule:#161616;--control:#444444;
+  --text:#ffffff;--muted:#b4b4b4;--faint:#949494;--accent:#4cb3f0;
+  --pill-negative-bg:#2c1a20;--pill-negative-ink:#e5566f;}
+*{box-sizing:border-box}
+html{color-scheme:dark}
+body{margin:0; background:#000; color:var(--text);
+  font:14px/1.5 Inter,system-ui,'Segoe UI',Roboto,sans-serif;
+  display:flex; min-height:100vh; align-items:center; justify-content:center; padding:20px;}
+.box{background:var(--surface); border-radius:20px; padding:30px; width:380px; max-width:100%;}
+h1{font-size:20px; font-weight:600; margin:0; letter-spacing:-.01em;}
+.sub{color:var(--faint); font-size:13px; margin:8px 0 20px;}
+label{display:block; font-size:14px; font-weight:500; margin:0 0 8px;}
+input{width:100%; background:#000; color:var(--text); border:1px solid var(--control);
+  border-radius:12px; padding:11px 14px; font:14px Inter,system-ui,sans-serif; margin-bottom:14px;}
+input:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+button{width:100%; background:#fff; color:#000; border:0; border-radius:999px;
+  padding:11px 18px; font:500 14px Inter,system-ui,sans-serif; cursor:pointer;}
+button:hover{background:#e6e6e6;}
+.err{color:var(--pill-negative-ink); background:var(--pill-negative-bg); border-radius:12px;
+  padding:10px 14px; font-size:13px; display:none; margin-bottom:14px;}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Авито → VK</h1>
+  <div class="sub">Админка парсера и постинга. Вход по логину и паролю из .env (ADMIN_USERNAME / ADMIN_PASSWORD)</div>
+  <div class="err" id="err">Неверный логин или пароль</div>
+  <form id="f">
+    <label for="u">Логин</label>
+    <input id="u" name="username" autocomplete="username" required>
+    <label for="p">Пароль</label>
+    <input id="p" name="password" type="password" autocomplete="current-password" required>
+    <button>Войти</button>
+  </form>
+</div>
+<script>
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target).entries());
+  const res = await fetch('/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+  if (res.ok) { location.href = '/'; return; }
+  document.getElementById('err').style.display = 'block';
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+# Парсер + постинг (ТЗ, раздел 2)
+selenium==4.52.0
+requests==2.32.5
+python-dotenv==1.2.1
+schedule==1.2.2
+Pillow==13.0.0

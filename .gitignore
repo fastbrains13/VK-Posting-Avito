@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Секреты и локальная конфигурация
+.env
+
+# Данные рантайма
+avito.db
+*.db
+data/photos/
+data/tmp/
+profile-*/
+logs/
+out/
+*.log
+*.csv
+*.json
+!package.json
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
