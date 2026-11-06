@@ -93,6 +93,19 @@ const text = (selectors) => {
   }
   return '';
 };
+// innerText сохраняет переносы строк, абзацы и эмодзи так, как их видит
+// пользователь; textContent склеивает абзацы в одну строку.
+const blockText = (selectors) => {
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      const v = el.getAttribute('content') || el.innerText || el.textContent || '';
+      const s = v.replace(/\u00a0/g, ' ').replace(/\r\n/g, '\n').trim();
+      if (s) return s;
+    }
+  }
+  return '';
+};
 const root = document.querySelector('[data-marker="item-view/main-gallery"]')
   || document.querySelector('[data-marker="card-gallery"]')
   || document;
@@ -113,7 +126,7 @@ if (!images.length) {
 return {
   title: text(['h1', '[itemprop="name"]']),
   price: text(['[itemprop="price"]', '[data-marker="item-view/item-price"]', '[data-marker="price-tag"]']),
-  description: text(['[data-marker="item-view/item-description"]', '[data-marker="text-block"]', '[itemprop="description"]']),
+  description: blockText(['[data-marker="item-view/item-description"]', '[data-marker="text-block"]', '[itemprop="description"]']),
   location: text(['[data-marker="item-view/item-address"]', '[data-marker="item-location"]', '[itemprop="address"]']),
   images: Array.from(new Set(images)),
   title_tag: document.title,

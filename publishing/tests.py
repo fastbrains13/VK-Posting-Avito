@@ -8,6 +8,7 @@ from avito.models import Ad, AdPhoto, AvitoSource
 from core.crypto import encrypt_token
 from core.models import JobRun, VKAccount, VKCommunity
 from publishing.models import Publication
+from publishing.renderer import build_message, clean_multiline
 from publishing.services import (
     PublishTooSoon,
     ServiceError,
@@ -125,3 +126,26 @@ class PublishTests(TestCase):
         job = JobRun.objects.create(kind=JobRun.KIND_PUBLISH, params={})
         publish_publication(publication.pk, job)
         self.assertEqual(FakeVK.post_tokens, ["community-token"])
+
+
+class RendererTests(TestCase):
+    def test_description_keeps_paragraphs_and_emoji(self):
+        text = clean_multiline("Привет 👋<br><br>Первый абзац ✅\nВторой абзац 🚀")
+        self.assertIn("👋", text)
+        self.assertIn("Первый абзац ✅", text)
+        self.assertIn("Второй абзац 🚀", text)
+        self.assertIn("\n\n", text)
+
+    def test_build_message_keeps_emoji_and_link(self):
+        from avito.models import Ad
+
+        ad = Ad(
+            avito_id="1", title="Тест 🚀", price_text="100 ₽",
+            description="Описание 👋\n\n• пункт 1\n• пункт 2",
+            url="https://www.avito.ru/test_1",
+        )
+        message = build_message(ad)
+        self.assertIn("🚀", message)
+        self.assertIn("👋", message)
+        self.assertIn("• пункт 1", message)
+        self.assertIn("https://www.avito.ru/test_1", message)

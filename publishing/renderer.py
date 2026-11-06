@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 
 from django.conf import settings
@@ -13,6 +14,8 @@ from django.conf import settings
 from avito.models import Ad
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_BLOCK_RE = re.compile(r"</(?:p|div|li|h[1-6]|tr|blockquote)>", re.IGNORECASE)
 _SPACES_RE = re.compile(r"[ \t\u00a0\u202f]+")
 
 
@@ -23,7 +26,12 @@ def clean_line(value: str | None) -> str:
 
 def clean_multiline(value: str | None) -> str:
     text = (value or "").replace("\r\n", "\n").replace("\r", "\n")
+    # Текст из innerText уже содержит переносы. Если пришёл HTML, сохраняем
+    # хотя бы структуру абзацев и списков, а не склеиваем всё в одну строку.
+    text = _BR_RE.sub("\n", text)
+    text = _BLOCK_RE.sub("\n", text)
     text = _TAG_RE.sub(" ", text)
+    text = html.unescape(text)
     lines = [_SPACES_RE.sub(" ", line).strip() for line in text.split("\n")]
     # Схлопываем больше двух пустых строк подряд, сохраняя абзацы.
     out: list[str] = []
