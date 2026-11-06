@@ -15,6 +15,7 @@ data/photos/
 data/tmp/
 profile-*/
 logs/
+mvp_v0/
 out/
 *.log
 *.csv

@@ -18,6 +18,10 @@ hash-роутинга больше нет: каждая страница нез�
 на данных и одном действии, уровни — тонирование рамки → лист → карточка.
 """
 
+from html import escape as _escape
+
+from avito_parser.settings import GROUPS, SPECS, SettingSpec
+
 # --------------------------------------------------------------------- #
 # каркас
 # --------------------------------------------------------------------- #
@@ -302,7 +306,19 @@ td .idcell{font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:13px; c
 .field{display:flex; flex-direction:column; gap:8px; min-width:0}
 .field > span{font-size:var(--fs-body); font-weight:500}
 .field > small{font-size:var(--fs-small); color:var(--muted)}
+.field input,.field select,.field textarea{background:var(--surface);
+  color:var(--ink);border:1px solid var(--border);
+  border-radius:var(--radius-card);height:40px;padding:0 12px;
+  font:400 var(--fs-body)/1.45 "IBM Plex Sans",system-ui,sans-serif;width:100%}
+.field textarea{height:auto;resize:vertical;line-height:1.5}
+.field select{appearance:none;cursor:pointer;padding-right:32px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' stroke='%235d5f60' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center}
 .frow{display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start}
+/* ряд полей настроек: число колонок задаётся по количеству полей, чтобы ряды не были рваными */
+.setrow{display:grid; gap:16px; align-items:start}
+/* одиночное поле не растягиваем на всю панель: число и id читаются с одного взгляда */
+.setrow .field:not(.wide) input,.setrow .field:not(.wide) select{max-width:320px}
 .switch{display:inline-flex; align-items:center; gap:10px; cursor:pointer; font-size:var(--fs-body)}
 .switch input{position:absolute; opacity:0; width:1px; height:1px}
 .track{width:33px; height:18px; border-radius:999px; background:var(--control);
@@ -321,11 +337,26 @@ td .idcell{font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:13px; c
 .slabel .ro{font-size:13px; color:var(--muted); margin-top:10px; line-height:1.6; word-break:break-all}
 .spanel{display:flex; flex-direction:column; gap:16px; background:var(--raised);
   border-radius:var(--radius-card); padding:16px}
-.sfoot{display:flex; justify-content:flex-end; align-items:center; gap:12px}
-.sfoot .saved{font-size:var(--fs-small); color:var(--muted)}
+.spanel .t2{font-size:13px; color:var(--muted); line-height:1.5}
+.spanel .t2 a{color:var(--accent); font-weight:500}
+.spanel .t2 a:hover{text-decoration:underline}
+/* панель сохранения: обычный ряд в конце формы (колонка центрирована, sticky тут не годится) */
+.sfoot{display:flex; justify-content:flex-end; align-items:center; gap:12px; flex-wrap:wrap;
+  padding-top:20px; border-top:1px solid var(--border)}
+.sfoot .saved{font-size:var(--fs-small); color:var(--muted); margin-right:auto}
+.field.wide{flex:1 1 100%}
+.field textarea{width:100%; min-width:280px; resize:vertical; line-height:1.5}
+.field .mono{font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:13px}
+.advfields{display:flex; flex-direction:column; gap:16px; padding-top:16px; border-top:1px solid var(--border)}
+.advfields[hidden]{display:none}
+/* точка на поле: значение сохранено в базе и перекрывает .env */
+.field.overridden > span::after,.switchrow.overridden .tw b::after{content:""; display:inline-block;
+  width:6px; height:6px; border-radius:50%; background:var(--accent); margin-left:7px; vertical-align:middle}
 .switchrow{display:flex; align-items:flex-start; justify-content:space-between; gap:16px}
 .switchrow .tw{display:flex; flex-direction:column; gap:3px}
 .switchrow .tw b{font-size:var(--fs-body); font-weight:500}
+.dangerrow .spanel{background:transparent; border:1px solid var(--pill-negative-bg);
+  border-radius:var(--radius-card); padding:14px 16px}
 .switchrow .tw small{font-size:var(--fs-small); color:var(--muted)}
 
 /* ---------- вложения и предпросмотр поста ---------- */
@@ -362,7 +393,7 @@ html[data-theme=light] .errline{border-color:var(--pill-warning-border)}
 .skel{background:var(--raised); border-radius:4px; display:inline-block; height:14px}
 .skel.big{height:28px; width:96px}
 .status{display:none; margin-bottom:16px; padding:10px 14px; border-radius:var(--radius-card);
-  background:var(--raised); border:1px solid var(--border); box-shadow:var(--shadow-float);
+  background:var(--raised); border:1px solid var(--border); box-shadow:var(--shadow-card);
   font-size:13px}
 .status.show{display:block}
 .status.err{background:var(--pill-negative-bg); border-color:var(--pill-negative-bg);
@@ -378,19 +409,28 @@ html[data-theme=light] .errline{border-color:var(--pill-warning-border)}
   .adcards{grid-template-columns:repeat(2,1fr)}
   .srow{grid-template-columns:1fr; gap:12px; padding:24px 0}
 }
+/* узкий лист: поля настроек в одну колонку, иначе подписи не помещаются */
+@media (max-width:900px){
+  .setrow{grid-template-columns:1fr !important}
+}
 /* ---------- телефон ---------- */
 @media (max-width:760px){
   body{display:block}
   .side{position:fixed; left:0; top:0; bottom:0; width:min(280px,84vw); height:100dvh;
-    background:var(--frame); transform:translateX(-105%); transition:transform .18s;
-    box-shadow:var(--shadow-float)}
-  .side.open{transform:none}
+    background:var(--frame); transform:translateX(-105%); transition:transform .18s}
+  .side.open{transform:none; box-shadow:var(--shadow-float)}
   #burger{display:inline-flex}
   .hideph{display:none}
+  /* топбар на телефоне узкий — статус VK не должен вылезать за край */
+  .topbar{gap:8px; padding:0 16px}
+  .crumb{min-width:0}
+  .stamp{display:none}
+  .vkswitch{min-width:0; max-width:150px}
   .sheet{border:0; border-radius:0; margin:0; padding:16px}
   .kpis{grid-template-columns:repeat(2,1fr); gap:12px}
   .kpis .kpi:nth-last-child(1):nth-child(odd){grid-column:1/-1}
   .adcards{grid-template-columns:1fr}
+  .setrow{grid-template-columns:1fr !important}
   .stages{flex-direction:column; align-items:stretch; gap:4px}
   .stage{padding:6px 0}
   .arr{transform:rotate(90deg); align-self:flex-start; padding-left:6px}
@@ -1490,152 +1530,210 @@ document.addEventListener('DOMContentLoaded', () => {
 # --------------------------------------------------------------------- #
 # раздел: настройки
 # --------------------------------------------------------------------- #
-SETTINGS_PAGE = r"""
+# Форма целиком собирается из реестра avito_parser/settings.py: чтобы добавить
+# параметр, достаточно записать его в SPECS (и, при необходимости, в GROUPS).
+def _esc(value: object) -> str:
+    return _escape(str(value if value is not None else ""), quote=True)
+
+
+def _gnum(value: float) -> str:
+    """Число для HTML-атрибута: 2.0 → '2', 0.5 → '0.5'."""
+    return ("%g" % float(value))
+
+
+def setting_field_html(spec: SettingSpec) -> str:
+    """Одно поле формы: id s_<ключ> плюс data-setting/data-kind для JS раздела."""
+    fid = "s_" + spec.key
+    label = _esc(spec.label)
+    hint = f"<small>{_esc(spec.hint)}</small>" if spec.hint else ""
+    placeholder = f' placeholder="{_esc(spec.placeholder)}"' if spec.placeholder else ""
+    common = f'id="{fid}" data-setting="{spec.key}"'
+
+    if spec.kind == "bool":
+        text = f"<b>{label}</b>" + (f"<small>{_esc(spec.hint)}</small>" if spec.hint else "")
+        return (f'<div class="switchrow"><div class="tw">{text}</div>'
+                f'<label class="switch"><input type="checkbox" {common} data-kind="bool"'
+                f' aria-label="{label}"><span class="track"></span></label></div>')
+
+    if spec.kind in ("int", "float"):
+        bounds = ""
+        if spec.minimum is not None:
+            bounds += f' min="{_gnum(spec.minimum)}"'
+        if spec.maximum is not None:
+            bounds += f' max="{_gnum(spec.maximum)}"'
+        bounds += f' step="{_gnum(spec.step if spec.step is not None else (1 if spec.kind == "int" else 0.5))}"'
+        return (f'<label class="field"><span>{label}</span>'
+                f'<input type="number" {common} data-kind="num"{bounds}{placeholder}>{hint}</label>')
+
+    if spec.choices:
+        options = "".join(f'<option value="{_esc(choice)}">{_esc(choice)}</option>' for choice in spec.choices)
+        return (f'<label class="field"><span>{label}</span>'
+                f'<select {common} data-kind="select">{options}</select>{hint}</label>')
+
+    if spec.kind in ("multiline", "list"):
+        rows = 6 if spec.kind == "multiline" else 4
+        return (f'<label class="field wide"><span>{label}</span>'
+                f'<textarea rows="{rows}" {common} data-kind="{spec.kind}"{placeholder}'
+                f' spellcheck="false"></textarea>{hint}</label>')
+
+    if spec.kind == "secret":
+        return (f'<label class="field"><span>{label}</span>'
+                f'<input type="password" {common} data-kind="secret"'
+                f' autocomplete="new-password"{placeholder}>{hint}</label>')
+
+    mono = ' class="mono"' if spec.kind == "path" else ""
+    return (f'<label class="field"><span>{label}</span>'
+            f'<input type="text" {common} data-kind="text"{mono}{placeholder}>{hint}</label>')
+
+
+def _row_sizes(count: int) -> list[int]:
+    """Сколько полей в ряду: три колонки, но без одинокого хвоста (4 -> 2+2, 7 -> 3+2+2)."""
+    if count <= 0:
+        return []
+    if count <= 3:
+        return [count]
+    sizes = [3] * (count // 3)
+    if count % 3:
+        sizes.append(count % 3)
+    if sizes[-1] == 1:
+        sizes[-1] = 2
+        sizes[-2] = 2
+    return sizes
+
+
+def _settings_panel(specs: list[SettingSpec]) -> str:
+    """Панель раздела: поля рядами равной ширины, переключатели — столбцом."""
+    parts: list[str] = []
+    buffer: list[SettingSpec] = []
+
+    def emit(items: list[SettingSpec]) -> None:
+        for size in _row_sizes(len(items)):
+            cols = f' style="grid-template-columns:repeat({size},minmax(0,1fr))"'
+            parts.append("<div class=\"setrow\"" + cols + ">"
+                         + "".join(setting_field_html(spec) for spec in items[:size]) + "</div>")
+            items = items[size:]
+
+    for spec in [s for s in specs if s.kind != "bool"]:
+        if spec.kind in ("multiline", "list"):   # широкие поля всегда занимают весь ряд
+            emit(buffer)
+            buffer = []
+            parts.append('<div class="setrow" style="grid-template-columns:1fr">'
+                         + setting_field_html(spec) + "</div>")
+        else:
+            buffer.append(spec)
+    emit(buffer)
+    parts.extend(setting_field_html(spec) for spec in specs if spec.kind == "bool")
+    return "".join(parts)
+
+
+# блоки, которые нельзя вывести из реестра: статус прокси, состояние ключа, подсказки
+GROUP_EXTRAS: dict[str, str] = {
+    "parse": r"""
+        <div class="t2">Ссылки для парсинга ведутся в разделе
+          <a href="/sources">Источники</a>: крон обходит включённые строки, а новая ссылка
+          в первый прогон берётся с лимитом выше. В <span class="mono">.env</span> адрес выдачи
+          больше не читается.</div>""",
+    "proxy": r"""
+        <div class="card" id="proxyCard" style="box-shadow:none">
+          <div class="cardhead" style="padding:0 0 10px;border-bottom:0">
+            <h3 style="font-size:14px">Прокси</h3><span id="proxyPill"></span>
+          </div>
+          <div id="proxyBody" class="t2">статус прокси не загружен</div>
+        </div>""",
+    "vk": r"""
+        <div class="t2" id="s_vktoken_state">—</div>
+        <div class="t2" id="s_appid_state">—</div>""",
+    "access": r"""
+        <div class="t2" id="s_admin_state">—</div>""",
+}
+
+
+def _settings_rows() -> str:
+    """Разметка всех разделов формы: левая подпись + панель полей."""
+    chunks: list[str] = []
+    for gid, title, note in GROUPS:
+        specs = [spec for spec in SPECS if spec.group == gid]
+        extra = GROUP_EXTRAS.get(gid, "")
+        if not specs and not extra:
+            continue
+        body = _settings_panel([spec for spec in specs if not spec.advanced])
+        advanced = [spec for spec in specs if spec.advanced]
+        if advanced:
+            body += '<div class="advfields" hidden>' + _settings_panel(advanced) + "</div>"
+        body += extra
+        chunks.append(
+            '<div class="srow srule">\n'
+            f'        <div class="slabel"><h3>{_esc(title)}</h3><p>{_esc(note)}</p></div>\n'
+            f'        <div class="spanel">{body}\n        </div>\n'
+            '      </div>'
+        )
+    return "\n\n".join(chunks)
+
+
+SETTINGS_PAGE = """
     <section class="page">
       <div class="titlerow">
         <div>
           <h1>Настройки</h1>
-          <p class="sub">Значения хранятся в базе и перекрывают <span class="mono">.env</span>:
-            приоритет БД → окружение → код. Пустые поля возвращаются к значениям из <span class="mono">.env</span>.</p>
+          <p class="sub" id="settingsSub">Все параметры парсера, браузера, прокси и публикации
+            живут здесь. Пустое поле возвращает параметр к <span class="mono">.env</span>.</p>
         </div>
         <div class="actions">
           <button class="btn" id="btnAdvanced" aria-expanded="false">Дополнительные параметры</button>
-          <button class="btn primary" id="btnSaveSettings">Сохранить</button>
+          <button class="btn primary" id="btnSaveSettingsTop">Сохранить</button>
         </div>
       </div>
 
-      <div class="srow srule">
-        <div class="slabel">
-          <h3>Расписание</h3>
-          <p>Фоновый обход источников и постинг. Пауза останавливает крон, но кнопки в админке продолжают работать.</p>
-        </div>
-        <div class="spanel">
-          <div class="frow">
-            <label class="field"><span>Парсинг, минут</span>
-              <input type="number" id="s_parse" min="1" max="1440"></label>
-            <label class="field"><span>Постинг, минут</span>
-              <input type="number" id="s_publish" min="1" max="1440"></label>
-          </div>
-          <label class="switch"><input type="checkbox" id="s_paused"><span class="track"></span>
-            Поставить крон на паузу</label>
-        </div>
-      </div>
+""" + _settings_rows() + """
 
-      <div class="srow srule">
+      <div class="srow srule dangerrow">
         <div class="slabel">
-          <h3>Парсинг</h3>
-          <p>Сколько карточек забирать с одной выдачи и что с ними делать дальше.</p>
+          <h3>Сброс к <span class="mono">.env</span></h3>
+          <p>Удаляет сохранённые в базе значения: каждый параметр вернётся к тому, что читается
+            из файла <span class="mono">.env</span>. Сам файл остаётся на месте.</p>
         </div>
         <div class="spanel">
-          <div class="frow">
-            <label class="field"><span>Лимит объявления за пуск</span>
-              <input type="number" id="s_frl" min="1" max="200">
-              <small>для источника, который парсится впервые</small></label>
-            <label class="field"><span>Страниц выдачи на источник</span>
-              <input type="number" id="s_pages" min="1" max="30"></label>
-          </div>
-          <div class="switchrow">
-            <div class="tw"><b>Открывать карточки</b><small>полное описание и фотографии с каждой страницы объявления</small></div>
-            <label class="switch"><input type="checkbox" id="s_details"><span class="track"></span></label>
-          </div>
-          <div class="switchrow">
-            <div class="tw"><b>Скачивать фото</b><small>сохранять снимки в <span class="mono">data/photos</span> для вложений в пост</small></div>
-            <label class="switch"><input type="checkbox" id="s_photos"><span class="track"></span></label>
-          </div>
-          <div class="card" id="proxyCard" style="box-shadow:none">
-            <div class="cardhead" style="padding:0 0 10px;border-bottom:0">
-              <h3 style="font-size:14px">Прокси</h3><span id="proxyPill"></span>
-            </div>
-            <div id="proxyBody" class="t2">статус прокси не загружен</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="srow srule">
-        <div class="slabel">
-          <h3>VK</h3>
-          <p>Сообщество и ограничения публикации. Ключ — в дополнительных параметрах или в <span class="mono">.env</span>.</p>
-        </div>
-        <div class="spanel">
-          <label class="field"><span>Сообщество (id или screen_name)</span>
-            <input type="text" id="s_vkgroup" placeholder="vk.com/club12345678">
-            <small id="s_vkgroup_hint">определится автоматически при проверке прав</small></label>
-          <div class="frow">
-            <label class="field"><span>Максимум фото в посте</span>
-              <input type="number" id="s_vkmax" min="0" max="10"></label>
-            <label class="field"><span>Минимальная пауза между постами, сек</span>
-              <input type="number" id="s_vkmin" min="0" max="3600">
-              <small>защита от лимита 902; 0 — выключить</small></label>
-          </div>
-          <div class="switchrow">
-            <div class="tw"><b>Постить только с фото</b><small>объявление без снимков остаётся в очереди</small></div>
-            <label class="switch"><input type="checkbox" id="s_reqphotos"><span class="track"></span></label>
-          </div>
-        </div>
-      </div>
-
-      <div class="srow srule">
-        <div class="slabel">
-          <h3>Публикация</h3>
-          <p>Сколько объявлений уходит за один запуск крона или кнопки «Постить очередь».</p>
-        </div>
-        <div class="spanel">
-          <label class="field" style="max-width:220px"><span>Объявлений за запуск</span>
-            <input type="number" id="s_batch" min="1" max="100"></label>
-        </div>
-      </div>
-
-      <div class="srow srule" id="advRow" hidden>
-        <div class="slabel">
-          <h3>Ключ доступа</h3>
-          <p>Токен хранится в базе, поэтому его видно здесь один раз и только по запросу.
-            Для фотографий на стене нужен ключ пользователя, полученный через standalone OAuth.</p>
-        </div>
-        <div class="spanel">
-          <label class="field"><span>VK access token</span>
-            <input type="password" id="s_vktoken" placeholder="вставьте новый ключ, чтобы заменить текущий" autocomplete="off"></label>
-          <div class="t2" id="s_vktoken_state">—</div>
-          <div class="t2" id="s_appid_state">—</div>
+          <div class="t2" id="s_reset_state">—</div>
+          <div><button class="btn txt neg" id="btnResetSettings">Сбросить всё к .env</button></div>
         </div>
       </div>
 
       <div class="sfoot">
         <span class="saved" id="saveStamp"></span>
         <button class="btn" id="btnReloadSettings">Откатить к сохранённому</button>
-        <button class="btn primary" id="btnSaveSettings2">Сохранить</button>
+        <button class="btn primary" id="btnSaveSettings">Сохранить</button>
       </div>
     </section>
 """
+
 SETTINGS_SCRIPT = r"""
-/* ---------- настройки: одна форма, значения из /api/state ---------- */
-const SETTING_FIELDS = {
-  parse_interval_min: ['#s_parse', 'num'],
-  publish_interval_min: ['#s_publish', 'num'],
-  cron_paused: ['#s_paused', 'bool'],
-  first_run_limit: ['#s_frl', 'num'],
-  pages_per_source: ['#s_pages', 'num'],
-  details_on: ['#s_details', 'bool'],
-  photos_on: ['#s_photos', 'bool'],
-  vk_group_id: ['#s_vkgroup', 'text'],
-  vk_max_photos_per_post: ['#s_vkmax', 'num'],
-  vk_min_interval_sec: ['#s_vkmin', 'num'],
-  vk_require_photos: ['#s_reqphotos', 'bool'],
-  publish_batch: ['#s_batch', 'num']
-};
-function setVal(sel, v){ const el = $(sel.slice(1)); if (el) el.value = v; }
-async function settingsLoad(){
-  let S;
-  try { S = await loadState(); } catch (e) { return statusMsg('Не удалось загрузить настройки: ' + e.message, 'err'); }
+/* ---------- настройки: разметка полей собрана из реестра, ключ — в data-setting ---------- */
+function settingFields(){
+  return Array.prototype.slice.call(document.querySelectorAll('[data-setting]'));
+}
+var SETTINGS_SUB = '';
+function settingsFill(S){
   const st = S.settings || {};
-  Object.keys(SETTING_FIELDS).forEach(k => {
-    const sel = SETTING_FIELDS[k][0], kind = SETTING_FIELDS[k][1];
-    const el = $(sel.slice(1)); if (!el) return;
-    if (kind === 'bool') el.checked = String(st[k]) === '1' || st[k] === true;
-    else el.value = st[k] != null ? st[k] : '';
+  const ovr = S.settings_overridden || [];
+  const masks = S.secret_masks || {};
+  settingFields().forEach(el => {
+    const key = el.dataset.setting, kind = el.dataset.kind, v = st[key];
+    if (kind === 'bool') el.checked = (String(v) === '1' || v === true);
+    else if (kind === 'secret') el.value = '';            // секрет наружу не отдаётся
+    else el.value = (v == null ? '' : v);
+    const box = el.closest('.field') || el.closest('.switchrow');
+    if (box) box.classList.toggle('overridden', ovr.indexOf(key) >= 0);
   });
+  // главная мысль экрана: сколько параметров уже перекрывают .env
+  const sub = $('settingsSub');
+  if (!SETTINGS_SUB) SETTINGS_SUB = sub.innerHTML;
+  const total = settingFields().length;
+  sub.innerHTML = SETTINGS_SUB + (ovr.length
+    ? ' · <b>' + fmt(ovr.length) + '</b> из ' + fmt(total) + ' сохранено в базе и перекрывают <span class="mono">.env</span>'
+    : ' · ни один из ' + fmt(total) + ' параметров ещё не сохранён в базе, везде работает <span class="mono">.env</span>');
   const vk = S.vk || {};
-  const mask = (S.settings || {}).vk_access_token_mask || '';
-  $('s_vktoken_state').innerHTML = vk.token_set
+  const mask = masks.vk_access_token || '';
+  $('s_vktoken_state').innerHTML = (mask || vk.token_set)
     ? 'Текущий ключ: <b>' + esc(vk.token_kind || 'установлен') + '</b> · ' + esc(mask) +
       (vk.can_upload_photos === false ? ' · фото на стену этим ключом загружать нельзя' : '') +
       (vk.oauth_url ? ' · <a id="vkOauthLink" href="' + esc(vk.oauth_url) +
@@ -1644,7 +1742,19 @@ async function settingsLoad(){
         '" target="_blank" rel="noopener">получить через OAuth</a>' : 'Ключ не задан');
   $('s_appid_state').textContent = vk.app_id
     ? 'ID standalone-приложения: ' + vk.app_id + ' (нужен для ссылки авторизации)'
-    : 'VK_APP_ID не задан — ссылка авторизации не строится';
+    : 'ID приложения не задан — ссылка авторизации не строится';
+  $('s_admin_state').textContent = masks.admin_password
+    ? 'Пароль сохранён в базе: ' + masks.admin_password + ' (новое значение применяется при перезапуске)'
+    : 'Пароль берётся из ADMIN_PASSWORD в .env';
+  $('s_reset_state').textContent = ovr.length
+    ? 'Сейчас в базе перекрывается ' + fmt(ovr.length) + ' из ' + fmt(total) +
+      ' значений — после сброса они вернутся к .env.'
+    : 'В базе пока ничего не перекрывает .env — сбрасывать нечего.';
+}
+async function settingsLoad(){
+  let S;
+  try { S = await loadState(); } catch (e) { return statusMsg('Не удалось загрузить настройки: ' + e.message, 'err'); }
+  settingsFill(S);
   settingsProxy();
 }
 async function settingsProxy(){
@@ -1667,37 +1777,48 @@ async function settingsProxy(){
       esc(p.log_path || '—') + '</b></div>';
   } catch (e) { box.textContent = 'Статус прокси недоступен: ' + e.message; }
 }
-async function settingsSave(){
-  const st = app.S ? (app.S.settings || {}) : {};
+function settingsCollect(){
   const payload = {};
-  Object.keys(SETTING_FIELDS).forEach(k => {
-    const kind = SETTING_FIELDS[k][1];
-    const el = $(SETTING_FIELDS[k][0].slice(1)); if (!el) return;
-    if (kind === 'bool') payload[k] = el.checked ? '1' : '0';
-    else if (kind === 'num') payload[k] = el.value === '' ? '' : String(el.value);
-    else payload[k] = el.value.trim();
+  settingFields().forEach(el => {
+    const key = el.dataset.setting, kind = el.dataset.kind;
+    if (kind === 'bool') payload[key] = el.checked ? '1' : '0';
+    else if (kind === 'secret') { const v = el.value.trim(); if (v) payload[key] = v; }
+    else if (kind === 'list' || kind === 'multiline') payload[key] = el.value.replace(/\r\n/g, '\n').trim();
+    else payload[key] = el.value.trim();
   });
-  const token = $('s_vktoken').value.trim();
-  if (token) payload.vk_access_token = token;
+  return payload;
+}
+async function settingsSave(){
   statusMsg('Сохраняем настройки…');
   try {
-    await post('/api/settings', payload);
-    $('s_vktoken').value = '';
+    const res = await post('/api/settings', settingsCollect());
+    settingFields().forEach(el => { if (el.dataset.kind === 'secret') el.value = ''; });
     $('saveStamp').textContent = 'сохранено ' + tm(new Date().toISOString());
-    statusMsg('Настройки сохранены', 'ok');
+    const note = (res && res.note) ? ' · ' + res.note : '';
+    statusMsg('Настройки сохранены' + note, 'ok');
     await loadState().catch(() => {});
     settingsLoad();
   } catch (e) { statusMsg('Ошибка: ' + e.message, 'err'); }
 }
+async function settingsReset(){
+  if (!confirm('Удалить все сохранённые в базе значения? Параметры вернутся к .env.')) return;
+  try {
+    await post('/api/settings', {action: 'reset'});
+    statusMsg('Настройки сброшены к значениям из .env', 'ok');
+    settingsLoad();
+  } catch (e) { statusMsg('Ошибка: ' + e.message, 'err'); }
+}
 $('btnAdvanced').addEventListener('click', () => {
-  const row = $('advRow'), on = row.hidden;
-  row.hidden = !on;
-  $('btnAdvanced').setAttribute('aria-expanded', String(on));
-  if (on) $('s_vktoken').focus();
+  const btn = $('btnAdvanced'), open = btn.getAttribute('aria-expanded') !== 'true';
+  document.querySelectorAll('.advfields').forEach(box => { box.hidden = !open; });
+  btn.setAttribute('aria-expanded', String(open));
+  btn.textContent = open ? 'Скрыть дополнительные' : 'Дополнительные параметры';
+  if (open) { const first = document.querySelector('.advfields [data-setting]'); if (first) first.focus(); }
 });
 $('btnReloadSettings').addEventListener('click', () => { settingsLoad(); statusMsg('Значения перечитаны из базы', 'ok'); });
+$('btnResetSettings').addEventListener('click', settingsReset);
 $('btnSaveSettings').addEventListener('click', settingsSave);
-$('btnSaveSettings2').addEventListener('click', settingsSave);
+$('btnSaveSettingsTop').addEventListener('click', settingsSave);
 /* настройки специально не перезаписываются автообновлением: поля могут быть заполнены */
 document.addEventListener('DOMContentLoaded', () => settingsLoad().catch(() => {}));
 """

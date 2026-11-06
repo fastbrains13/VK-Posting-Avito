@@ -1,7 +1,9 @@
 """Конфигурация парсера.
 
-Все настройки читаются из переменных окружения (файл .env), чтобы систему
-можно было настраивать без правки исходного кода (см. ТЗ, раздел 5).
+Классы ниже собирают первоначальные значения из переменных окружения (файл
+.env). Настраиваемые параметры админки лежат поверх них: см. `settings.py` —
+приоритет БД → окружение → дефолты кода. Отслеживаемые ссылки в окружении больше
+не задаются: они живут в таблице `sources` и добавляются в разделе «Источники».
 """
 
 import os
@@ -43,12 +45,12 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "y", "on", "да")
 
 
-def _unescape(value: str) -> str:
-    """Развернуть escape-последовательности из .env в настоящие символы.
+def unescape(value: str) -> str:
+    """Развернуть escape-последовательности в настоящие символы.
 
-    Значения в .env dotenv отдаёт как есть, поэтому шаблон поста с буквальным
-    backslash-n превращаем в реальный перенос строки. chr() вместо слешей в
-    исходнике — чтобы сам файл не зависел от правил экранирования.
+    Нужно и для значений из .env (dotenv отдаёт их как есть), и для шаблонов
+    поста, сохранённых в настройках админки. chr() вместо слешей в исходнике —
+    чтобы сам файл не зависел от правил экранирования.
     """
     if not value:
         return value
@@ -56,6 +58,9 @@ def _unescape(value: str) -> str:
     for letter, code in (("n", 10), ("r", 13), ("t", 9)):
         value = value.replace(backslash + letter, chr(code))
     return value
+
+
+_unescape = unescape  # совместимость с прежними импортами внутри пакета
 
 
 def _opt_path(name: str, default: str = "") -> Path | None:
@@ -116,10 +121,11 @@ class BrowserConfig:
 class ParserConfig:
     """Параметры самого парсера."""
 
-    # Отслеживаемые ссылки: AVITO_TARGET_URL принимает несколько URL через запятую/
-    # точку с запятой/перевод строки, SOURCES_FILE — файл со ссылкой на строку.
-    target_url: str = _env_str("AVITO_TARGET_URL", "https://www.avito.ru/moskva/avtomobili")
-    sources_file: Path | None = _opt_path("SOURCES_FILE")
+    # Отслеживаемые ссылки в окружении не задаются: список источников ведётся
+    # в таблице `sources` (раздел «Источники» админки или аргументы CLI).
+    # Поле остаётся рабочим: UI/CLI кладут в него ссылки конкретного прогона.
+    target_url: str = ""
+    sources_file: Path | None = None
     pages: int = _env_int("PAGES_COUNT", 1)
     fetch_details: bool = _env_bool("PARSE_DETAILS", True)
     max_ads_per_run: int = _env_int("MAX_ADS_PER_RUN", 0)  # 0 = без лимита
@@ -183,7 +189,7 @@ class VkConfig:
     # ТЗ: постить не чаще одного объявления в 3-5 минут
     min_interval_sec: float = _env_float("VK_POST_MIN_INTERVAL_SEC", 240.0)
     # шаблон текста поста; \n в .env понимается как перенос строки
-    template: str = _unescape(_env_str(
+    template: str = unescape(_env_str(
         "VK_POST_TEMPLATE",
         "{title}\nЦена: {price}\n\n{description}\n\nСсылка: {url}",
     ))

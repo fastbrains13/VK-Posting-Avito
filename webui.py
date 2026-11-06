@@ -10,7 +10,8 @@
     очередь в VK раз в M минут (интервалы настраиваются в админке);
   * управление ссылками Авито: добавить / включить / выключить / удалить;
     новая ссылка в первый прогон парсится не более first_run_limit объявлений;
-  * настройки VK: пауза между постами, require_photos, размер пачки;
+  * раздел «Настройки»: все параметры парсера, браузера, пула прокси, VK и логов
+    хранятся в базе и перекрывают .env (реестр — avito_parser/settings.py);
   * ручные запуск парсинга и публикация очереди, живой лог задач.
 
 Реализовано на stdlib http.server, чтобы не тянуть веб-фреймворк.
@@ -40,11 +41,23 @@ from avito_parser.config import Config, split_urls
 from avito_parser.database import Database
 from avito_parser.logger import get_logger, setup_logging
 from avito_parser.scraper import AvitoScraper, source_label
+from avito_parser.settings import (
+    SECRET_KEYS,
+    SETTING_KEYS,
+    apply_db_settings,
+    browser_signature,
+    coerce,
+    current_value,
+    effective_settings,
+    overridden_keys,
+    sanitize_for_storage,
+    spec_for,
+)
 from avito_parser.vk_publisher import VKPublisher, VkError
 from avito_parser.browser import ProxySettings
 
 ROOT = Path(__file__).resolve().parent
-PHOTOS_ROOT = (ROOT / "data" / "photos").resolve()
+PHOTOS_ROOT = (ROOT / "data" / "photos").resolve()   # запасной вариант, если photos_dir не задан
 MAX_DESCRIPTION = 600
 SESSION_COOKIE = "avito_admin"
 SESSION_TTL = 7 * 24 * 3600
@@ -193,21 +206,20 @@ class PublishService:
         self._group_checked_at = 0.0
         self.apply_settings()
 
-    def apply_settings(self) -> None:
-        """Настройки из БД применяются к конфигу VK перед каждым запуском.
+    def apply_settings(self) -> dict:
+        """Положить настройки из БД поверх конфигурации VK и пересобрать кэши клиента.
 
-        Токен и сообщество можно сменить из админки: они переопределяют .env,
-        пока в БД хранится непустое значение.
+        Всё, что раньше читалось только из .env (ключ, сообщество, шаблон поста,
+        лимиты, таймауты, прокси), теперь лежит в таблице settings: непустое
+        значение перекрывает окружение, пустое — оставляет его.
         """
-        vk = self.config.vk
-        token = self.db.setting_get("vk_access_token", "") or ""
-        if token:
-            vk.access_token = token
-        group = self.db.setting_get("vk_group_id", "") or ""
-        if group:
-            vk.group_id = group
-        vk.min_interval_sec = float(self.db.setting_int("vk_min_interval_sec", 240))
-        vk.require_photos = self.db.setting_bool("vk_require_photos", False)
+        before = (self.config.vk.proxy_string, self.config.vk.group_id, self.config.vk.access_token)
+        apply_db_settings(self.config, self.db)
+        after = (self.config.vk.proxy_string, self.config.vk.group_id, self.config.vk.access_token)
+        if before != after:
+            # прокси/сообщество/ключ кэшируются в клиенте — их перезапускаем
+            self.publisher.reload()
+        return {"vk_proxy": self.config.vk.proxy_string, "group_id": self.config.vk.group_id}
 
     def describe(self) -> dict:
         """Сводка канала для UI; сообщество подтверждается не чаще раза в 5 минут."""
@@ -352,25 +364,28 @@ class ParseService:
         return split_urls(raw)
 
     def _config_for(self, params: dict) -> tuple[Config, tuple]:
-        """Собрать конфигурацию прогона; подпись нужна для решения «пересоздавать ли браузер»."""
+        """Собрать конфигурацию прогона: окружение → настройки из админки → параметры задачи.
+
+        Подпись нужна, чтобы понять, пересоздавать ли браузер: смена прокси,
+        headless-режима, ротации User-Agent или таймаута требует нового профиля.
+        """
         config = Config.load()
+        apply_db_settings(config, self.db)
         urls = self.request_urls(params)
         if params.get("use_sources"):
-            # крон/кнопка «парсить всё»: берём включённые источники из базы
             urls = [s["url"] for s in self.db.source_summary() if s["enabled"]]
         if urls:
             config.parser.set_sources(urls)
-        pages = self.db.setting_int("pages_per_source", 1)
-        config.parser.pages = int(params.get("pages") or pages)
-        config.parser.max_photos = max(1, int(params.get("max_photos") or 5))
-        config.parser.details_sample = int(params.get("limit") or 0)
-        config.parser.fetch_details = bool(self.db.setting_int("details_on", 1))
-        config.parser.download_photos = bool(self.db.setting_int("photos_on", 1))
-        config.browser.headless = bool(params.get("headless", True))
+        config.parser.pages = int(params.get("pages") or config.parser.pages)
+        config.parser.max_photos = max(1, int(params.get("max_photos") or config.parser.max_photos))
+        if params.get("limit"):
+            config.parser.max_ads_per_run = int(params["limit"])
+        if "headless" in params:
+            config.browser.headless = bool(params["headless"])
         proxy = (params.get("proxy") or "").strip()
         if proxy or not params.get("use_sources"):
             config.browser.proxy_string = proxy
-        signature = (config.browser.proxy_string, config.browser.headless)
+        signature = browser_signature(config)
         return config, signature
 
     def _ensure_scraper(self, config: Config, signature: tuple) -> AvitoScraper:
@@ -431,7 +446,7 @@ class ParseService:
             # лимит первого прогона: новая ссылка (runs == 0) парсится не более N объявлений,
             # чтобы за один цикл не улетать в сотню карточек незнакомой категории
             first_run_limit = self.db.setting_int("first_run_limit", 10)
-            effective_limit = config.parser.details_sample or None
+            effective_limit = config.parser.max_ads_per_run or None
             if first_run_limit:
                 fresh_sources = [s["url"] for s in self.db.source_summary()
                                  if s["url"] in urls and not s["runs"]]
@@ -561,7 +576,8 @@ class SchedulerService:
         if not enabled:
             self.last_parse_result = "нет включённых ссылок"
             return
-        job = self.parse_service.submit({"urls": "", "use_sources": True, "headless": True})
+        # headless не передаём: режим берётся из настроек (параметр «Без окна»)
+        job = self.parse_service.submit({"urls": "", "use_sources": True})
         self.last_parse_job = job.id
         self.last_parse_result = f"запущен в {datetime.now().strftime('%H:%M:%S')}"
 
@@ -597,6 +613,7 @@ class Handler(BaseHTTPRequestHandler):
     publish: PublishService = None  # type: ignore[assignment]
     auth: AuthService = None  # type: ignore[assignment]
     scheduler: SchedulerService = None  # type: ignore[assignment]
+    config: Config = None  # type: ignore[assignment]  # общая конфигурация (окружение + настройки БД)
     no_auth: bool = False  # только для локальной отладки интерфейса (--no-auth)
 
     protocol_version = "HTTP/1.1"
@@ -726,20 +743,33 @@ class Handler(BaseHTTPRequestHandler):
 
         self._json({"error": "not found"}, 404)
 
+    def _settings_payload(self) -> dict:
+        """Настройки для формы: значение из базы, иначе из окружения, иначе пусто.
+
+        Секреты в браузер целиком не отдаются — только маска, чтобы показать,
+        задан ли ключ и чем он является.
+        """
+        db = self.service.db
+        masks: dict[str, str] = {}
+        for key in SECRET_KEYS:
+            spec = spec_for(key)
+            masks[key] = token_mask(str(current_value(Handler.config, spec) or "")) if spec else ""
+        return {
+            "settings": effective_settings(Handler.config, db),
+            "secret_masks": masks,
+            "settings_overridden": sorted(overridden_keys(db)),
+        }
+
     def _state(self) -> dict:
         db = self.service.db
         recent = db.get_unposted(limit=8) or []
         vk = self.publish.channel_info()
-        settings = db.all_settings()
-        # ключ не отдаём в браузер целиком — только маску для подсказки
-        token = settings.pop("vk_access_token", "") or ""
-        settings["vk_access_token_mask"] = token[:10] + "…" + token[-4:] if token else ""
         jobs_live = sum(1 for job in list(self.service.jobs.values()) + list(self.publish.jobs.values())
                         if job.status in ("queued", "running"))
         return {
             "db": db.stats(),
             "sources": db.source_summary(),
-            "settings": settings,
+            **self._settings_payload(),
             "scheduler": self.scheduler.state(),
             "vk": vk,
             "jobs_live": jobs_live,
@@ -886,12 +916,24 @@ class Handler(BaseHTTPRequestHandler):
                    extra={"Content-Disposition": f'attachment; filename="avito_ads_{stamp}.csv"'})
         logger.info("Экспорт CSV: %d строк (фильтр %s)", len(ads), flt)
 
+    def _photos_root(self) -> Path:
+        """Каталог фото из живых настроек: путь задаётся в разделе «Настройки» и может быть относительным."""
+        raw = str(getattr(Handler.config.parser, "photos_dir", "") or "").strip()
+        root = Path(raw) if raw else PHOTOS_ROOT
+        if not root.is_absolute():
+            root = ROOT / root
+        return root.resolve()
+
     def _serve_photo(self, query: dict) -> None:
-        """Отдать скачанный файл из data/photos (только jpg/png, без выхода за директорию)."""
+        """Отдать скачанный файл из каталога фото (только jpg/png, без выхода за директорию)."""
         name = (query.get("path") or [""])[0]
         ad_id = (query.get("ad") or [""])[0]
-        candidate = (PHOTOS_ROOT / ad_id / Path(name).name).resolve()
-        if not str(candidate).startswith(str(PHOTOS_ROOT)) or not candidate.is_file():
+        root = self._photos_root()
+        # файлы лежат в <photos_dir>/<avito_id>/<файл>; старый плоский расклад тоже поддерживаем
+        candidate = (root / ad_id / Path(name).name).resolve()
+        if not candidate.is_file():
+            candidate = (root / Path(name).name).resolve()
+        if not str(candidate).startswith(str(root)) or not candidate.is_file():
             self._json({"error": "файл не найден"}, 404)
             return
         suffix = candidate.suffix.lower()
@@ -1023,29 +1065,65 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json({"error": "неизвестное действие"}, 400)
 
+    def _apply_live_settings(self) -> str:
+        """Переложить сохранённые настройки на живые сервисы, не перезапуская процесс.
+
+        Возвращает короткую заметку для UI о том, что потребовало перезапуска
+        внутреннего (браузер) или внешнего (весь сервис).
+        """
+        db = self.service.db
+        before = browser_signature(Handler.config)
+        apply_db_settings(Handler.config, db)
+        self.publish.apply_settings()
+        # уровень и файл лога действуют сразу: setup_logging идемпотентен
+        setup_logging(Handler.config.parser.log_level, Handler.config.parser.log_file)
+        notes: list[str] = []
+        if before != browser_signature(Handler.config):
+            self.service.cleanup()          # профиль Chrome пересоздастся на следующем прогоне
+            notes.append("браузер перезапустится с новыми параметрами")
+        stored_db = (db.setting_get("db_path") or "").strip()
+        if stored_db and Path(stored_db).resolve() != Path(db.db_path).resolve():
+            # база уже открыта по старому пути: новый файл подхватится при старте процесса
+            notes.append("путь к базе применится после перезапуска сервиса")
+        return " · ".join(notes)
+
     def _handle_settings(self, params: dict) -> None:
-        allowed = {
-            "parse_interval_min", "publish_interval_min", "first_run_limit",
-            "pages_per_source", "details_on", "photos_on", "vk_min_interval_sec",
-            "vk_require_photos", "vk_max_photos_per_post", "publish_batch",
-            "vk_access_token", "vk_group_id", "cron_paused",
-        }
-        values = {k: str(v).strip() for k, v in params.items() if k in allowed}
-        # пустой токен в форме не затирает ключ, сохранённый ранее
-        if not values.get("vk_access_token"):
-            values.pop("vk_access_token", None)
+        """POST /api/settings: сохранить поля из реестра настроек либо сбросить всё к .env."""
+        db = self.service.db
+        if str(params.get("action") or "") == "reset":
+            removed = db.settings_clear(sorted(SETTING_KEYS))
+            note = self._apply_live_settings()
+            self._json({"ok": True, "cleared": removed, "note": note})
+            return
+
+        values: dict[str, str] = {}
+        invalid: list[str] = []
+        for key, raw in params.items():
+            spec = spec_for(key)
+            if spec is None:
+                continue                     # в реестре этого нет — не пишем в базу
+            text = sanitize_for_storage(spec, raw)
+            if spec.kind == "secret" and not text:
+                continue                     # пустое поле секрета не затирает сохранённый ключ
+            if spec.kind in ("int", "float") and text and coerce(spec, text) is None:
+                invalid.append(spec.label)   # число, которое числом не является
+                continue
+            values[spec.key] = text
+        if invalid:
+            self._json({"error": "нужно число: " + ", ".join(invalid)}, 400)
+            return
         if not values:
             self._json({"error": "нет допустимых полей"}, 400)
             return
-        self.service.db.settings_bulk(values)
-        logged = dict(values)
-        if "vk_access_token" in logged:
-            logged["vk_access_token"] = logged["vk_access_token"][:10] + "…"
-        logger.info("Настройки обновлены из админки: %s", logged)
-        # VK-ключ и сообщество применяем сразу, не дожидаясь следующего цикла
-        self.publish.apply_settings()
-        self._json({"ok": True, "saved": {k: ("…" if k == "vk_access_token" else v)
-                                          for k, v in values.items()}})
+
+        db.settings_bulk(values)
+        secrets = {key for key in values if spec_for(key) and spec_for(key).kind == "secret"}
+        logger.info("Настройки обновлены из админки: %s",
+                    {key: (token_mask(value) if key in secrets else value) for key, value in values.items()})
+        note = self._apply_live_settings()
+        self._json({"ok": True,
+                    "saved": {key: ("…" if key in secrets else value) for key, value in values.items()},
+                    "note": note})
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"[ui] {self.address_string()} {fmt % args}")
@@ -1063,13 +1141,13 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     config = Config.load()
+    db = Database(config.parser)
+    # настройки из админки ложатся поверх окружения: БД → .env → дефолты кода
+    apply_db_settings(config, db)
+    if args.no_headless:
+        config.browser.headless = False       # локальная отладка: окно браузера видно
     setup_logging(config.parser.log_level, config.parser.log_file)
     auth = AuthService(config)
-
-    db = Database(config.parser)
-    # синхронизируем источники из .env при старте; дальше админка — источник истины
-    for url in config.parser.sources():
-        db.register_source(url, source_label(url))
 
     publish_service = PublishService(config, db)
     service = ParseService(config, publish_service, db)
@@ -1079,6 +1157,7 @@ def main(argv: list[str] | None = None) -> int:
     Handler.publish = publish_service
     Handler.auth = auth
     Handler.scheduler = scheduler
+    Handler.config = config
     Handler.no_auth = args.no_auth
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
@@ -1086,8 +1165,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_auth:
         print("ВНИМАНИЕ: вход отключён (--no-auth) — только для локальной отладки!")
     else:
+        where = "из настроек админки" if db.setting_get("admin_password") else "из .env"
         print(f"Логин: {auth.username} / пароль: "
-              f"{'задан в .env' if config.admin_password else auth.password + ' (сгенерирован — задайте ADMIN_PASSWORD в .env)'}")
+              f"{('задан ' + where) if config.admin_password else auth.password + ' (сгенерирован — задайте ADMIN_PASSWORD в .env или пароль в разделе «Настройки»)'}")
     try:
         vk = publish_service.describe()
         if vk.get("error"):

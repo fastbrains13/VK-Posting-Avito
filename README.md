@@ -1,7 +1,8 @@
 # Avito Parser + VK Publisher
 
 Парсер объявлений Авито (Selenium) с автоматической публикацией в сообщество ВКонтакте.
-Работает из CLI, через веб-админку или в Docker. Настройка — только `.env`, без правки кода.
+Работает из CLI, через веб-админку или в Docker. Все параметры правятся в разделе
+**Настройки** админки; `.env` — стартовые значения, править код для смены настроек не нужно.
 
 ## Что внутри
 
@@ -13,6 +14,7 @@
 | `webui_page.py` | HTML/CSS/JS интерфейса админки |
 | `avito_parser/` | Пакет ядра |
 | `avito_parser/config.py` | Конфиг из `.env` (парсер, браузер, VK, админка) |
+| `avito_parser/settings.py` | Реестр настроек админки: типы, подписи, группы формы, наложение на `.env` |
 | `avito_parser/browser.py` | Запуск Chrome (anti-detect, UA-ротация, прокси-пул, fallback на прямой IP) |
 | `avito_parser/human.py` | Имитация поведения человека (случайные задержки, скролл) |
 | `avito_parser/scraper.py` | Парсинг выдачи и карточек (Selenium) |
@@ -39,21 +41,17 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Заполните в `.env` как минимум:
+Минимально необходимые значения в `.env`:
 
-```
-# Авито
-AVITO_TARGET_URL=https://www.avito.ru/.../mobile-ASgBAgICAUSwwQ2I_Dc
+- **VK** — `VK_ACCESS_TOKEN` (ключ сообщества с правами `photos, wall, groups`) и `VK_GROUP_ID=public123456789`
+- **Админка** — `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_SECRET` (длинный случайный hex)
 
-# VK — ключ сообщества (права photos, wall, groups)
-VK_ACCESS_TOKEN=vk1.a.…
-VK_GROUP_ID=public123456789
+Ссылки для парсинга в `.env` не задаются: после входа в админку добавьте их в разделе
+**Источники** (таблица `sources`). Остальные параметры — задержки, прокси, шаблоны поста,
+интервалы крона — при желании правятся там же в **.env** или прямо в разделе **Настройки**.
 
-# Админка
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=your-strong-password
-ADMIN_SECRET=long-random-hex
-```
+Оставшиеся после первого запуска изменения из админки хранятся в SQLite и перекрывают
+`.env` — переменные окружения остаются запасным входом и стартовыми значениями.
 
 ### 3. Запуск
 
@@ -96,7 +94,8 @@ docker compose up --build
 
 ```
 python main.py "https://..." "https://..."          # парсить указанные
-python main.py                                       # из AVITO_TARGET_URL / SOURCES_FILE
+python main.py                                       # из включённых источников БД
+python main.py --urls-file urls.txt                  # список ссылок из файла
 python main.py --details --photos                    # с описанием и фото
 python main.py --publish                             # сразу постить в VK
 python main.py --publish-dry-run                     # собрать посты, не отправляя
@@ -130,7 +129,7 @@ python publisher.py --stats                 # статистика очеред�
 4. **VK-канал** — состояние (сообщество, токен, фото), предпросмотр следующего поста, история опубликованных, настройки (интервал, пачка, только фото, OAuth-ключ)
 5. **Задачи** — журнал всех фоновых задач с раскрываемыми логами
 6. **Логи** — хвост `avito_parser.log`, авто-обновление, скачивание файла
-7. **Настройки** — расписание крона, пауза крона, лимиты парсинга, статус прокси
+7. **Настройки** — все параметры парсера, браузера, прокси, VK и системы; перекрывают `.env`
 
 ### Постинг с фото
 
@@ -144,31 +143,36 @@ VK запрещает загрузку фото ключами сообщест�
 
 ### Настройки
 
-Параметры из админки сохраняются в БД и перекрывают `.env`. Полный список полей в `database.py:DEFAULT_SETTINGS`:
+Раздел **Настройки** — форма, собранная из реестра `avito_parser/settings.py`: 50 параметров
+в 9 группах (расписание, парсинг, браузер, прокси, блокировки, ВКонтакте, очередь публикации,
+система, доступ). Приоритет значений:
 
-| Поле | По умолчанию | Описание |
-|---|---|---|
-| `parse_interval_min` | 15 | интервал парсинга, мин |
-| `publish_interval_min` | 30 | интервал постинга, мин |
-| `first_run_limit` | 10 | лимит объявлений при первом прогоне новой ссылки |
-| `pages_per_source` | 1 | страниц выдачи на источник |
-| `details_on` | 1 | качать описания |
-| `photos_on` | 1 | качать фото |
-| `vk_min_interval_sec` | 240 | пауза между постами, сек |
-| `vk_require_photos` | 0 | постить без фото (community-токен не умеет photos) |
-| `vk_max_photos_per_post` | 10 | макс фото в посте |
-| `publish_batch` | 5 | объявлений за один цикл |
-| `cron_paused` | 0 | пауза крона (1 = стоит) |
-| `vk_access_token` | (пусто) | ключ VK (приоритет над .env) |
-| `vk_group_id` | (пусто) | сообщество VK (приоритет над .env) |
+```
+сохранённое в таблице settings (SQLite)  →  переменная окружения (.env)  →  дефолт из кода
+```
+
+- Пустое поле параметр не перекрывает — значение остаётся из `.env`.
+- Сохранённые в базе поля помечены в форме, подзаголовком считается «N из 50 сохранено в базе».
+- «Сбросить настройки» очищает таблицу — все поля возвращаются к значениям из `.env`.
+- Секреты (`vk_access_token`, `admin_password`) наружу не отдаются: вместо значения маска,
+  пустое поле означает «не менять».
+- Прокси для браузера — списком, по одному адресу на строку (`login:pass@ip:port`,
+  `socks5://ip:port`): это пул, из которого `browser.py` берёт живой адрес.
+- Параметры меняются на лету: крон перечитывает интервалы, VK-канал пересобирает ключ и шаблон,
+  браузер пересоздаётся при смене прокси/headless/таймаута. Логин, пароль и файл базы
+  применяются после перезапуска сервиса.
+
+В окружении не задаются только параметры админки: `parse_interval_min`, `publish_interval_min`,
+`cron_paused`, `first_run_limit`, `publish_batch` (дефолты — `database.py:DEFAULT_SETTINGS`).
 
 ## Архитектура
 
 ```
-.env ──→ Config.load() ──→ ParserConfig / VkConfig / BrowserConfig
-                          ──→ Database   (SQLite avito.db, WAL)
-                          ──→ AvitoScraper (Selenium, browser.py, human.py, photos.py)
-                          ──→ VKPublisher  (photos.getWallUploadServer, wall.post)
+.env ─────────────→ Config.load() ──→ ParserConfig / VkConfig / BrowserConfig
+settings (SQLite) ─→ settings.apply_db_settings() ─┘   (приоритет БД → .env → код)
+                                    ──→ Database   (SQLite avito.db, WAL)
+                                    ──→ AvitoScraper (Selenium, browser.py, human.py, photos.py)
+                                    ──→ VKPublisher  (photos.getWallUploadServer, wall.post)
 
 webui.py (stdlib http.server)
   ├─ Handler: GET/POST → /api/*, /export.csv, /login, /logout
@@ -189,8 +193,14 @@ main.py / publisher.py — standalone CLI, не зависят от webui
 ## Тесты
 
 ```bash
+.venv/bin/python tests/settings_test.py
 .venv/bin/python tests/vk_flow_test.py
 ```
+
+`tests/settings_test.py` — проверяет реестр настроек на временной базе: без строк в БД
+параметры не трогают `.env`, сохранённые значения ложатся в `Config` (включая прокси-пул
+списком), очищенное поле возвращается к окружению, форма отдаёт все 50 ключей, маска секрета
+не содержит самого ключа, а разметка `SETTINGS_PAGE` рисует поле для каждой настройки.
 
 `tests/vk_flow_test.py` — smoke-тест VK-флоу. Подменяет `requests.Session` фиктивным
 клиентом, который отвечает ровно теми формами, что отдаёт VK, и проверяет 7 сценариев:

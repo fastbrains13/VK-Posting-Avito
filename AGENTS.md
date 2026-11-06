@@ -6,7 +6,7 @@
 
 Парсер объявлений Авито (Selenium) + автопостинг в сообщество VK.
 Без фреймворков: `stdlib http.server` (админка), `argparse` (CLI), `sqlite3` (БД), `requests` (VK API), `selenium` (браузер).
-Всё настраивается через `.env` — **не правьте код для изменения параметров**.
+Все параметры правятся в разделе «Настройки» админки; `.env` — стартовые значения. **Не правьте код для изменения параметров**.
 
 ## Структура
 
@@ -23,6 +23,7 @@
 ├── avito_parser/
 │   ├── __init__.py        # экспорты пакета
 │   ├── config.py          # Config, ParserConfig, VkConfig, BrowserConfig (.env)
+│   ├── settings.py        # реестр настроек админки: SPECS/GROUPS, apply_db_settings, coerce
 │   ├── browser.py         # запуск Chrome (anti-detect, UA-ротация, прокси)
 │   ├── human.py           # имитация поведения человека
 │   ├── scraper.py         # парсинг выдачи и карточек (Selenium)
@@ -31,15 +32,17 @@
 │   ├── export.py          # CSV / JSON выгрузка
 │   └── vk_publisher.py    # VK API: wall.post, фото, ошибки (27, 14, 6/9/29, 902)
 ├── tests/
-│   └── vk_flow_test.py    # smoke-тест VK-флоу (dry-run, group-check, mock)
+│   ├── settings_test.py    # реестр настроек: наложение на Config, форма, разметка страницы
+│   ├── ui_smoke.mjs        # smoke-проверка всех разделов админки через headless Chrome (CDP)
+│   └── vk_flow_test.py     # smoke-тест VK-флоу (dry-run, group-check, mock)
 ├── data/                  # авито.db, photos/ — на хосте (volume)
 └── logs/                  # avito_parser.log — на хосте (volume)
 ```
 
 ## Золотые правила
 
-1. **`.env` — источник правды.** Параметры парсера, VK, браузера читаются из окружения. Если нужно добавить настройку — добавьте в `config.py` + `.env.example` + `webui_page.py` (Настройки).
-2. **БД — `avito_parser/database.py`.** Миграции в `_migrate()`. `DEFAULT_SETTINGS` (строка 368) — дефолты настроек админки. Приоритет: БД > `.env` > код.
+1. **Настройки — реестр `avito_parser/settings.py`.** `SPECS`/`GROUPS` описывают каждый параметр: тип, подпись, группу формы, секцию `Config` и переменную окружения. `webui_page.py` строит поля из реестра, поэтому новый параметр достаточно добавить в `SPECS` (+ поле в `config.py` и `.env.example`) — форма, `POST /api/settings` и наложение на `Config` подхватят его сами. Не добавляйте поля формы вручную.
+2. **Приоритет: БД > `.env` > код.** `apply_db_settings(config, db)` вызывается при старте `webui.py` и перед каждым прогоном; пустое поле = «не перекрывать окружение». `DEFAULT_SETTINGS` в `database.py` — дефолты только тех параметров, у которых нет переменной окружения (интервалы крона, пачка, лимит первого прогона, пауза). Ссылки для парсинга в настройках нет — они живут в таблице `sources`.
 3. **Webui — stdlib `http.server`.** Никаких Django/FastAPI. GET/POST в `Handler.do_GET` / `do_POST`. Роуты — `if path == ...` / `if route == ...`.
 4. **Фоновые задачи — `Job` в памяти.** `PublishService` и `ParseService` хранят `jobs: dict[str, Job]`. `SchedulerService` — цикл парсинг → постинг → сон.
 5. **`webui_page.py` — страницы, а не один SPA.** `LAYOUT_SHELL` (каркас: сайдбар + топбар + лист, CSS-токены обеих тем, общий JS) и по одному шаблону на раздел: `DASHBOARD_PAGE`, `ADS_PAGE`, `SOURCES_PAGE`, `VK_PAGE`, `JOBS_PAGE`, `LOGS_PAGE`, `SETTINGS_PAGE` + `LOGIN_PAGE`. Карта `PAGES: url → (имя, заголовок, разметка, скрипт)`, сборка — `page_html(route)`. Hash-роутинга нет: раздел — это URL, фильтры/поиск/страница живут в query-параметрах (`linkTo`). CSS inline в `<style>` каркаса, JS раздела — в `@@SCRIPT@@` слоте. Правки — через `edit_file` на подстроку.
@@ -54,13 +57,33 @@
 ```python
 Config.load() → Config(
     browser=BrowserConfig(...),   # HEADLESS_MODE, прокси, задержки, UA
-    parser=ParserConfig(...),     # AVITO_TARGET_URL, PARSE_DETAILS, MAX_RETRIES
+    parser=ParserConfig(...),     # PAGES_COUNT, PARSE_DETAILS, MAX_RETRIES, PHOTOS_DIR
     vk=VkConfig(...),             # VK_ACCESS_TOKEN, VK_GROUP_ID, VK_APP_ID, шаблон
     admin_username, admin_password, admin_secret  # админка
 )
 ```
 
-Все поля — из переменных окружения с дефолтами. `_unescape()` разбирает `\n` в шаблонах поста.
+Все поля — из переменных окружения с дефолтами. `unescape()` (он же `_unescape`) разбирает `\n` в шаблонах поста.
+`ParserConfig.target_url` больше не читается из окружения: ссылки кладёт CLI или раздел «Источники»
+(`set_sources([...])`), значение по умолчанию — пустое.
+
+### `settings.py`
+
+Реестр настроек админки — один источник истины и для наложения на `Config`, и для разметки формы.
+
+```python
+SettingSpec(key, kind, label, group, hint=..., section=..., attr=..., env=...,
+            advanced=..., minimum=..., maximum=..., step=..., placeholder=..., choices=...)
+```
+
+- `kind`: `int | float | bool | text | secret | path | multiline | list` (`list` — прокси-пул,
+  по адресу на строку; `secret` — наружу отдаётся только маска).
+- `section`/`attr` — куда ложить значение в `Config` (`''` = параметр живёт только в БД).
+- Функции: `apply_db_settings(config, db)` (идемпотентен — сначала возврат к снимку `Config()`),
+  `coerce`, `sanitize_for_storage`, `effective_settings(config, db)` (строки для формы),
+  `overridden_keys`, `browser_signature` (при изменении пересоздать браузер), `spec_for`,
+  `keys_of_groups`, `describe_spec`.
+- `SECRET_KEYS`, `BROWSER_KEYS`, `SETTING_KEYS` — производные множества ключей.
 
 ### `database.py`
 
@@ -73,6 +96,8 @@ Config.load() → Config(
 - `list_ads(flt, q, limit, offset)` — фильтрация + поиск
 - `counts_by_filter()` → `{'all', 'pending', 'posted', 'partial'}`
 - `setting_get/set/bulk` — настройки админки
+- `raw_settings()` — только реально сохранённые строки (без дефолтов), нужно `settings.apply_db_settings`
+- `settings_clear(keys)` — сброс настроек к значениям из `.env`
 - `register_source / touch_source / set_source_enabled` — источники
 
 ### `webui.py`
@@ -80,10 +105,10 @@ Config.load() → Config(
 **Классы:**
 - `AuthService` — HMAC cookie-сессии (`issue` / `verify` / `check_login`)
 - `Job` — задача (id, params, status, progress, log, posts, error, elapsed)
-- `PublishService` — постинг (`submit` / `submit_one` / `_publish`)
+- `PublishService` — постинг (`submit` / `submit_one` / `_publish` / `apply_settings` — перечитать ключ и шаблон из БД)
 - `ParseService` — парсинг (`submit` / `_run` / `_config_for` / `_ensure_scraper`)
 - `SchedulerService` — крон (`_loop`: parse → publish → sleep)
-- `Handler(BaseHTTPRequestHandler)` — HTTP-обработчик
+- `Handler(BaseHTTPRequestHandler)` — HTTP-обработчик; `_settings_payload` / `_apply_live_settings` / `_handle_settings`
 
 **GET роуты:**
 | Путь | Описание |
@@ -102,7 +127,7 @@ Config.load() → Config(
 | `/api/sources` | CRUD источников |
 | `/api/ads` | POST: delete, requeue |
 | `/api/scheduler` | POST: пауза крона |
-| `/api/settings` | POST: bulk-обновление настроек |
+| `/api/settings` | POST: bulk-обновление настроек (`{"action":"reset"}` — сброс к `.env`) |
 | `/export.csv` | выгрузка CSV с BOM |
 | `/photo` | отдача скачанного фото |
 | `/job/<id>` | статус задачи, прогресс, лог (40 последних строк), ads, posts |
@@ -135,6 +160,10 @@ Config.load() → Config(
 - состояние фильтров — query-параметры (`?filter=pending&q=...&page=2&job=...`), читаются при старте страницы
 - глобальные `#status` и `#joblog` живут в каркасе, вне `.page`
 - разметка раздела инкрементальна: блок не готов → `.skel`, ошибка → `.errline` с кнопкой повтора внутри блока
+- **Настройки** строятся из реестра: `_settings_panel(group)` рисует `.setrow` с числом колонок из `_row_sizes(n)`,
+  широкие поля (`multiline`/`list`) — отдельный ряд и `class="wide"`; у каждого поля `data-setting="key"`;
+  сохранённые в базе помечаются `data-overridden`; опасная зона — `.dangerrow` с `#btnResetSettings`;
+  счётчик «N из 50 сохранено в базе» — `#settingsSub`
 
 ### `vk_publisher.py`
 
@@ -216,11 +245,14 @@ docker compose up --build
 ## Частые операции
 
 ### Добавить настройку
-1. `config.py` — добавить поле в нужный `@dataclass`
+1. `config.py` — добавить поле в нужный `@dataclass` (если параметр перекрывается из админки)
 2. `.env.example` — описание + дефолт
-3. `database.py DEFAULT_SETTINGS` — если перекрывается из админки
-4. `webui_page.py` — поле в `SETTINGS_PAGE` (разметка) + ключ в `SETTING_FIELDS` (загрузка/сборка формы)
-5. `webui.py` — добавить в `_handle_settings` `allowed` set
+3. `settings.py SPECS` — `SettingSpec(key, kind, label, group, section=..., attr=..., env=...)`;
+   если у параметра нет переменной окружения — добавить дефолт в `database.py DEFAULT_SETTINGS`
+4. `webui_page.py` — ничего: поля формы строятся из реестра (`data-setting="key"`); при необходимости
+   поправьте `_row_sizes`/`_settings_panel`, если группа требует другой раскладки
+5. `webui.py` — ничего: `_handle_settings` принимает все ключи из `SETTING_KEYS`; живое применение
+   новых параметров — в `_apply_live_settings` / `PublishService.apply_settings`
 
 ### Добавить раздел (страницу)
 1. `webui_page.py` — `НОВЫЙ_PAGE` + `НОВЫЙ_SCRIPT`, запись в `PAGES["/новый"]`

@@ -122,8 +122,8 @@ FILES = [
     "avito_parser/__init__.py", "avito_parser/browser.py", "avito_parser/config.py",
     "avito_parser/database.py", "avito_parser/export.py", "avito_parser/human.py",
     "avito_parser/logger.py", "avito_parser/photos.py", "avito_parser/scraper.py",
-    "avito_parser/vk_publisher.py",
-    "tests/vk_flow_test.py", "tests/ui_smoke.mjs",
+    "avito_parser/settings.py", "avito_parser/vk_publisher.py",
+    "tests/vk_flow_test.py", "tests/settings_test.py", "tests/ui_smoke.mjs",
 ]
 
 cli = paramiko.SSHClient()
@@ -201,8 +201,12 @@ VK_GROUP_ID=public123456789            # или числовой id со зна�
 VK_APP_ID=<id standalone-приложения>   # нужен для ссылки получения user-ключа (фото)
 
 # --- источники парсинга ---
-AVITO_TARGET_URL=https://www.avito.ru/...
+# Ссылки в .env не задаются: добавьте их после входа в админку, раздел «Источники».
 ```
+
+Ссылки для парсинга больше не переменные окружения: их ведут в разделе **«Источники»**
+веб-админки (таблица `sources` в `/opt/avito/data/avito.db`). CLI берёт включённые источники
+из той же базы либо ссылки из аргументов (`python main.py "https://..."`).
 
 Подставить сгенерированный секрет без ручного редактирования:
 
@@ -210,11 +214,12 @@ AVITO_TARGET_URL=https://www.avito.ru/...
 sed -i "s|^ADMIN_SECRET=.*|ADMIN_SECRET=$(openssl rand -hex 32)|" /opt/avito/.env
 ```
 
-### Важно про приоритеты настрое
+### Важно про приоритеты настроек
 
 1. **Настройки из веб-админки (таблица `settings` в SQLite) перекрывают `.env`.**
-   Ключ VK и сообщество, заданные в разделе «VK-канал», имеют приоритет над
-   `VK_ACCESS_TOKEN`/`VK_GROUP_ID` из `.env`.
+   Полный реестр — `avito_parser/settings.py`: 50 параметров в 9 группах.
+   Приоритет: таблица `settings` → переменные окружения (`.env`) → дефолты кода.
+   Пустое поле = «не перекрывать».
 2. **Секция `environment:` в `docker-compose.yml` перекрывает `env_file`.**
    Пути внутри контейнера зафиксированы там:
 
@@ -229,6 +234,10 @@ sed -i "s|^ADMIN_SECRET=.*|ADMIN_SECRET=$(openssl rand -hex 32)|" /opt/avito/.en
    Менять их нужно в compose-файле, а не в `.env`, иначе изменение проигнорируется.
    Пути относительные — они указывают в смонтированные тома `./data` и `./logs`,
    поэтому база и фото переживают пересборку образа.
+3. **Сохранённая в админке настройка перекрывает и `.env`, и `environment:` compose.**
+   Поэтому `DB_PATH`, `PHOTOS_DIR` и `LOG_FILE` в разделе «Система» лучше не трогать:
+   абсолютный путь внутри контейнера указатель не найдёт, а сохранённое в базе значение
+   переживёт правку compose-файла. Сбросить его — «Опасная зона» → «Сбросить настройки».
 
 ### Если ключ VK ещё не получен
 
@@ -265,6 +274,12 @@ docker inspect --format '{{.State.Health.Status}}' avito_webui
 VK: сообщество «...» (id ...), в очереди 0, опубликовано 0
 Крон: парсинг каждые 15 мин, публикация каждые 30 мин
 ```
+
+После входа:
+
+1. **Добавьте источники** — раздел «Источники»: ссылка на выдачу Авито + кнопка «Парсить».
+2. **Настройте параметры** — раздел «Настройки»: задержки, прокси, VK-шаблон, интервалы (перекрывают `.env`).
+3. Проверьте **VK-канал**: токен, сообщество, предпросмотр поста.
 
 Если вместо «задан в .env» показан сгенерированный пароль — значит `ADMIN_PASSWORD`
 в `.env` пустой: задайте и пересоздайте контейнер.
@@ -353,6 +368,7 @@ node tests/ui_smoke.mjs http://127.0.0.1:8000/ admin '<ADMIN_PASSWORD>'
 ```bash
 docker cp /opt/avito/tests avito_webui:/app/tests
 docker compose exec webui python tests/vk_flow_test.py    # → ВСЕ ПРОВЕРКИ ПРОШЛИ
+docker compose exec webui python tests/settings_test.py   # → все assert прошли
 ```
 
 Тест берёт реальные jpg из `data/photos/*/*.jpg` (нужно минимум 3 файла — они в смонтированном
@@ -544,6 +560,7 @@ docker stats avito_webui --no-stream          # потребление CPU/RAM
 - [ ] `docker compose up -d --build --wait` → `healthy`
 - [ ] `/api/state` без cookie отдаёт `401`
 - [ ] вход работает, в топе виден статус сообщества VK
+- [ ] в «Источниках» добавлена хотя бы одна ссылка на выдачу Авито
 - [ ] `node tests/ui_smoke.mjs ...` → `RESULT: 0 FAIL`
 - [ ] крон сделал цикл: в `Объявлениях` появились новые записи, в `Задачах` — задачи
-- [ ] бэкап `.env` и `data/avito.db` настроен (шаг 9)
+- [ ] бэкап `.env` **и** `data/avito.db` настроен (шаг 9): настройки админки живут в базе

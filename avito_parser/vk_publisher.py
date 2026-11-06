@@ -147,6 +147,25 @@ class VKPublisher:
         self._last_post_at: float = 0.0
 
     # ------------------------------------------------------------------ #
+    # применение настроек
+    # ------------------------------------------------------------------ #
+    def reload(self) -> None:
+        """Пересобрать кэши после изменения настроек из админки.
+
+        `Config.vk` мутируется на месте (см. settings.apply_db_settings), поэтому
+        токен, шаблон и лимиты подхватываются сами — а вот прокси, id сообщества
+        и адрес сервера загрузки фото кэшируются в конструкторе, их обновляем здесь.
+        """
+        self._proxy = ProxySettings.parse(self.vk.proxy_string) if self.vk.proxy_string else None
+        url = self._proxy.requests_url if self._proxy else None
+        self.session.proxies.update({"http": url, "https": url})
+        if self._proxy:
+            logger.info("Запросы к VK идут через прокси %s", self._proxy)
+        self._group_id = self.vk.group_number()
+        self._group_info = {}
+        self._upload_server = {}
+
+    # ------------------------------------------------------------------ #
     # низкоуровневый вызов API
     # ------------------------------------------------------------------ #
     def _call(self, method: str, *, timeout: float | None = None,

@@ -118,16 +118,27 @@ const MEASURE = (want) => {
     out.ready = out.ready && out.tail > 20 && out.auto;
   }
   if (want === 'settings') {
-    const num = ['s_frl', 's_pages', 's_batch', 's_publish'];
-    out.filled = num.filter(id => { const e = document.getElementById(id); return e && e.value !== ''; }).length;
-    out.toggles = ['s_details', 's_photos', 's_paused', 's_reqphotos'].filter(id => !!document.getElementById(id)).length;
+    // поля формы собираются из реестра: ключ настройки — в data-setting, тип — в data-kind
+    const F = (key) => document.querySelector(`[data-setting="${key}"]`);
+    const numKeys = ['parse_interval_min', 'publish_interval_min', 'first_run_limit', 'pages_per_source',
+      'max_photos_per_ad', 'publish_batch', 'delay_min', 'max_retries'];
+    out.numFilled = numKeys.filter(k => { const e = F(k); return e && e.value !== ''; }).length;
+    out.numTotal = numKeys.length;
+    out.toggles = ['details_on', 'photos_on', 'cron_paused', 'vk_require_photos']
+      .filter(k => { const e = F(k); return e && e.type === 'checkbox'; }).length;
+    out.kinds = N('[data-setting]');
     out.proxy = (T('#proxyCard') || '').slice(0, 90);
-    const tk = document.getElementById('s_vktoken');
+    out.proxyList = !!F('proxy_list') && F('proxy_list').tagName.toLowerCase() === 'textarea';
+    const tk = F('vk_access_token');
     const mask = T('#s_vktoken_state') || '';
     out.tokenEmpty = !!tk && tk.value === '';
     out.tokenMasked = /симв|маск|ключ/i.test(mask) && !/vk1\.a\.[A-Za-z0-9]{20}/.test(mask + (tk ? tk.value : ''));
-    out.advanced = !!document.getElementById('advRow')?.hidden;
-    out.ready = out.ready && out.filled === 4 && out.toggles === 4;
+    out.advHidden = !!document.querySelector('.advfields')?.hidden;
+    out.targetUrlGone = !F('avito_target_url') && !/AVITO_TARGET_URL/.test(document.querySelector('.page').textContent);
+    out.resetRow = !!document.getElementById('btnResetSettings') && !!document.querySelector('.dangerrow');
+    out.saveBtns = N('#btnSaveSettings, #btnSaveSettingsTop');
+    out.ready = out.ready && out.numFilled === out.numTotal && out.toggles === 4 &&
+      out.kinds >= 40 && out.proxyList && out.targetUrlGone;
   }
   return out;
 };
@@ -225,10 +236,16 @@ const lg = R.logs;
 check('хвост лога', lg.tail > 20, `${lg.tail} симв.`);
 check('скачивание лога доступно', lg.download);
 const s = R.settings;
-check('числовые настройки из БД', s.filled === 4, `${s.filled}/4`);
+check('числовые настройки заполнены из базы/.env', s.numFilled === s.numTotal, `${s.numFilled}/${s.numTotal}`);
 check('переключатели настроек', s.toggles === 4, `${s.toggles}/4`);
+check('полей реестра в форме', s.kinds >= 40, `${s.kinds}`);
+check('прокси вводится списком (textarea)', s.proxyList);
 check('статус прокси виден', /прокси|proxy|socks|карант|прям|адресов|пул|здоров/i.test(s.proxy), s.proxy);
 check('ключ VK не светится в форме', s.tokenEmpty && s.tokenMasked, `поле пустое: ${s.tokenEmpty}`);
+check('ссылки для парсинга убраны из настроек', s.targetUrlGone);
+check('опасная зона со сбросом', s.resetRow);
+check('сохранение в одном месте', s.saveBtns === 2, `${s.saveBtns} кнопок`);
+check('дополнительные параметры свёрнуты', s.advHidden);
 
 // опубликованные посты: проверяем историю только если они реально есть в базе
 const posted = await page.eval(async () => {

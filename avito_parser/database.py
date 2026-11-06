@@ -365,20 +365,15 @@ class Database:
     # ------------------------------------------------------------------ #
     # настройки админки (key-value поверх .env)
     # ------------------------------------------------------------------ #
+    # Дефолты только тех параметров, у которых нет значения в окружении: интервалы
+    # крона и лимиты админки. Полный реестр настроек — в avito_parser/settings.py:
+    # остальные перекрывают .env, лишь когда строка реально сохранена в таблице.
     DEFAULT_SETTINGS: dict[str, str] = {
         "parse_interval_min": "15",       # крон: как часто парсить источники
         "publish_interval_min": "30",     # крон: как часто публиковать очередь в VK
         "first_run_limit": "10",          # новая ссылка: сколько объявлений парсить в первый прогон
-        "pages_per_source": "1",          # сколько страниц выдачи обходить
-        "details_on": "1",                # качать описания
-        "photos_on": "1",                 # качать фото
-        "vk_min_interval_sec": "240",     # пауза между постами VK
-        "vk_require_photos": "0",         # постить без фото (community-ключ не умеет photos)
-        "cron_paused": "0",               # пауза крона из админки (0 = работает)
-        "vk_access_token": "",            # ключ VK из админки (пусто = берётся из .env)
-        "vk_group_id": "",                # сообщество VK из админки (пусто = берётся из .env)
-        "vk_max_photos_per_post": "10",
         "publish_batch": "5",             # сколько объявлений за один цикл публикации
+        "cron_paused": "0",               # пауза крона из админки (0 = работает)
     }
 
     def setting_get(self, key: str, default: str | None = None) -> str | None:
@@ -420,6 +415,31 @@ class Database:
         merged = dict(self.DEFAULT_SETTINGS)
         merged.update(rows)
         return merged
+
+    def raw_settings(self) -> dict[str, str]:
+        """Только реально сохранённые строки, без DEFAULT_SETTINGS.
+
+        Нужно для наложения настроек поверх .env (avito_parser/settings.py):
+        отсутствующая строка и пустое значение означают «параметр не перекрывали».
+        """
+        with self._lock:
+            rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
+        return {r["key"]: (r["value"] or "") for r in rows}
+
+    def settings_clear(self, keys: list[str]) -> int:
+        """Удалить строки настроек — параметры вернутся к значениям из окружения."""
+        if not keys:
+            return 0
+        placeholders = ", ".join("?" for _ in keys)
+        with self._lock:
+            cur = self._conn.execute(
+                f"DELETE FROM settings WHERE key IN ({placeholders})", tuple(keys)
+            )
+            self._conn.commit()
+        removed = int(cur.rowcount or 0)
+        if removed:
+            logger.info("Настройки сброшены к значениям из .env: %s", ", ".join(sorted(keys)))
+        return removed
 
     def source_summary(self) -> list[dict[str, Any]]:
         """Сводка по источникам для админки: статистика прогона + всего объявлений."""

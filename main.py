@@ -24,7 +24,19 @@ from avito_parser.database import Database
 from avito_parser.export import save_to_csv, save_to_json
 from avito_parser.logger import get_logger, setup_logging
 from avito_parser.scraper import AvitoScraper, source_label
+from avito_parser.settings import apply_db_settings
 from avito_parser.vk_publisher import VKPublisher, VkError
+
+
+def load_config() -> Config:
+    """Конфигурация для CLI: .env, перекрытый настройками админки из базы."""
+    config = Config.load()
+    db = Database(config.parser)
+    try:
+        apply_db_settings(config, db)
+    finally:
+        db.close()
+    return config
 
 
 def publish_results(config: Config, limit: int | None, dry_run: bool) -> list:
@@ -59,8 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Парсер новых объявлений Авито (Selenium + имитация поведения человека)",
     )
     ap.add_argument("urls", nargs="*", help=(
-        "Одна или несколько ссылок на выдачу Авито; по умолчанию AVITO_TARGET_URL (можно "
-        "списком через запятую) и/или SOURCES_FILE"))
+        "Одна или несколько ссылок на выдачу Авито; по умолчанию — включённые "
+        "источники из базы (раздел «Источники» админки)"))
     ap.add_argument("--urls-file", metavar="FILE", help="Файл со ссылками, по одной на строку")
     ap.add_argument("-p", "--pages", type=int, help="Количество страниц выдачи (по умолчанию 1)")
     ap.add_argument("--details", dest="details", action="store_true", default=None,
@@ -115,7 +127,7 @@ def print_ads(ads: list[dict], with_photos: bool, show_source: bool = False) -> 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config = Config.load()
+    config = load_config()
 
     if args.verbose:
         config.parser.log_level = "DEBUG"
@@ -144,7 +156,12 @@ def main(argv: list[str] | None = None) -> int:
 
     urls = config.parser.sources()
     if not urls:
-        logger.error("Не задано ни одной ссылки: укажите URL, AVITO_TARGET_URL или SOURCES_FILE")
+        # в аргументах ссылок нет — берём включённые источники из базы (раздел «Источники»)
+        with Database(config.parser) as db:
+            urls = [s["url"] for s in db.list_sources() if s.get("enabled")]
+    if not urls:
+        logger.error("Не задано ни одной ссылки: передайте URL аргументами или добавьте "
+                     "источник в админке (раздел «Источники»)")
         return 2
 
     print(f"Отслеживаю {len(urls)} ссылк(и):")

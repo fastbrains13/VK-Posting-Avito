@@ -10,7 +10,8 @@
     python publisher.py --watch                 # дежурить: постить по мере появления новых
     python publisher.py --test "Тестовый пост"  # произвольный пост (для проверки прав)
 
-Ключ сообщества и id задаются в .env: VK_ACCESS_TOKEN, VK_GROUP_ID.
+Ключ сообщества и id задаются в разделе «Настройки» админки; если база ещё пуста —
+в .env: VK_ACCESS_TOKEN, VK_GROUP_ID.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import time
 from avito_parser.config import Config
 from avito_parser.database import Database
 from avito_parser.logger import get_logger, setup_logging
+from avito_parser.settings import apply_db_settings
 from avito_parser.vk_publisher import VKPublisher, VkCaptchaRequired, VkError, VkPublishLimit
 
 
@@ -52,6 +54,22 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def load_config() -> Config:
+    """Конфигурация для CLI: значения из .env, перекрытые настройками админки.
+
+    Раздел «Настройки» хранится в таблице settings той же базы, поэтому коротко
+    открываем её, накладываем значения и закрываем: флаги запуска применяются
+    поверх и остаются старшими.
+    """
+    config = Config.load()
+    db = Database(config.parser)
+    try:
+        apply_db_settings(config, db)
+    finally:
+        db.close()
+    return config
+
+
 def print_post(publisher: VKPublisher, ad: dict, index: int, total: int) -> None:
     message = publisher.build_message(ad)
     photos = publisher.collect_photos(ad, allow_download=False)
@@ -63,7 +81,7 @@ def print_post(publisher: VKPublisher, ad: dict, index: int, total: int) -> None
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config = Config.load()
+    config = load_config()
     if args.verbose:
         config.parser.log_level = "DEBUG"
     if args.token:

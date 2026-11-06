@@ -34,14 +34,15 @@ prompt_secret() {
   printf -v "$var_name" '%s' "$value"
 }
 
-prompt AVITO_URL "Ссылка на выдачу Авито (пусто — не менять)"
+# Ссылки для парсинга больше не спрашиваем: они живут в разделе «Источники» админки,
+# а остальные параметры — в разделе «Настройки» (перекрывают .env).
 prompt ADMIN_USERNAME "Имя администратора" "admin"
 prompt_secret ADMIN_PASSWORD "Новый пароль админки"
 prompt_secret VK_ACCESS_TOKEN "VK access token"
 prompt VK_GROUP_ID "ID или короткий адрес сообщества VK (пусто — не менять)"
 prompt VK_APP_ID "VK App ID (пусто — не менять)"
 prompt DOMAIN "Домен админки (например admin.example.com; пусто — SSH-туннель)"
-export AVITO_URL ADMIN_USERNAME ADMIN_PASSWORD VK_ACCESS_TOKEN VK_GROUP_ID VK_APP_ID DOMAIN
+export ADMIN_USERNAME ADMIN_PASSWORD VK_ACCESS_TOKEN VK_GROUP_ID VK_APP_ID DOMAIN
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates docker.io docker-compose-v2
@@ -83,11 +84,10 @@ updates = {
     "ADMIN_USERNAME": os.environ.get("ADMIN_USERNAME", "admin"),
     "ADMIN_SECRET": current_value("ADMIN_SECRET") or secrets.token_hex(32),
 }
-for key in ("AVITO_URL", "ADMIN_PASSWORD", "VK_ACCESS_TOKEN", "VK_GROUP_ID", "VK_APP_ID"):
+for key in ("ADMIN_PASSWORD", "VK_ACCESS_TOKEN", "VK_GROUP_ID", "VK_APP_ID"):
     value = os.environ.get(key, "")
     if value:
-        env_key = "AVITO_TARGET_URL" if key == "AVITO_URL" else key
-        updates[env_key] = value
+        updates[key] = value
 
 if not updates.get("ADMIN_PASSWORD") and not current_value("ADMIN_PASSWORD"):
     raise SystemExit("Нужно задать ADMIN_PASSWORD: запустите скрипт и введите пароль.")
@@ -156,4 +156,5 @@ else
   echo "ssh -N -L 8000:127.0.0.1:8000 USER@SERVER_IP"
   echo "Затем откройте http://localhost:8000"
 fi
+echo "Ссылки для парсинга добавьте в разделе «Источники», остальные параметры — в разделе «Настройки» (сохранённые значения перекрывают .env)."
 echo "Для постинга с фото проверьте токен и переключатель «Только посты с фото» в разделе VK-канал."
