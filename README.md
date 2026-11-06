@@ -2,6 +2,8 @@
 
 Парсер Авито и ручная публикация объявлений в сообщество ВКонтакте с фотографиями.
 
+Репозиторий: https://github.com/fastbrains13/VK-Posting-Avito
+
 Сейчас это осознанно узкий MVP:
 
 - один пользовательский токен VK;
@@ -170,7 +172,7 @@ docker compose version
 ```bash
 sudo mkdir -p /opt/avito
 sudo chown "$USER":"$USER" /opt/avito
-git clone <URL_РЕПОЗИТОРИЯ> /opt/avito
+git clone https://github.com/fastbrains13/VK-Posting-Avito.git /opt/avito
 cd /opt/avito
 ```
 
