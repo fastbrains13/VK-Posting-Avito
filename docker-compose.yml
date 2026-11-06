@@ -1,7 +1,6 @@
 # =========================================================
 # Оркестрация Avito Parser + VK Publisher
-# Сервис: webui — админка; крон (парсинг источников → постинг в VK) живёт внутри неё,
-# отдельный worker-контейнер не нужен: на 1 CPU/1 ГБ он только спорит с вебом за память.
+# Сервис webui; Caddy включается профилем domain при установке с доменом.
 # =========================================================
 
 services:
@@ -10,7 +9,7 @@ services:
     container_name: avito_webui
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
@@ -27,3 +26,23 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  caddy:
+    image: caddy:2
+    container_name: avito_caddy
+    profiles: ["domain"]
+    restart: unless-stopped
+    depends_on:
+      - webui
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
