@@ -182,13 +182,20 @@ class VKPublisher:
                 raise VkError(f"VK вернул не JSON (HTTP {response.status_code}): "
                               f"{response.text[:200]}", code=0) from None
 
+            if not isinstance(data, dict):
+                # api.vk.com отвечает объектом; если пришёл массив/строка — не падаем на .get
+                return data
+
             if "error" not in data:
                 return data.get("response", data)
 
             error = data["error"]
+            if not isinstance(error, dict):
+                raise VkError(str(error)[:200], code=0, response=data)
             code = int(error.get("error_code") or 0)
             message = str(error.get("error_msg") or "unknown error")
-            details = error.get("error_data") or {}
+            details = error.get("error_data")
+            details = details if isinstance(details, dict) else {}
             last_error = VkError(message, code=code, response=data)
 
             if code == 14:
@@ -221,9 +228,14 @@ class VKPublisher:
 
         try:
             info = self._call("groups.getById", group_id=self.vk.group_id.lstrip("-"), fields="screen_name")
-            data = info.get("groups") or []
+            # ключ сообщества отдаёт {"groups": [...]}, ключ пользователя — {"count", "items"}
+            if isinstance(info, list):
+                info = next((g for g in info if isinstance(g, dict)), {})
+            if not isinstance(info, dict):
+                info = {}
+            data = info.get("groups") or info.get("items") or []
             if data and isinstance(data, list):
-                info = data[0]
+                info = next((g for g in data if isinstance(g, dict)), info)
         except VkError as exc:
             # токен сообщества не может читать группы напрямую — парсим локально
             if "27" in str(exc) or "Group authorization" in str(exc):
@@ -273,7 +285,11 @@ class VKPublisher:
 
     def wall_url(self, post_id: str | int) -> str:
         """Постоянная ссылка на запись: wall-<id группы>_<id поста>."""
-        return f"https://vk.com/wall-{self._group_id}_{post_id}"
+        # user-ключ может вернуть post_id уже в форме «-<gid>_<pid>» — берём номер поста
+        text = str(post_id)
+        if "_" in text:
+            text = text.split("_", 1)[-1]
+        return f"https://vk.com/wall-{self._group_id}_{text}"
 
     # ------------------------------------------------------------------ #
     # фотографии
@@ -295,14 +311,18 @@ class VKPublisher:
                     "укажите его в админке (Настройки → VK: ключ доступа)."
                 ) from exc
             raise
-        if not server.get("upload_url"):
+        if not isinstance(server, dict) or not server.get("upload_url"):
             raise VkError(f"VK не вернул upload_url: {server}")
         self._upload_server = server
         return server
 
     @staticmethod
-    def _parse_upload_items(data: dict[str, Any]) -> list[dict[str, Any]]:
+    def _parse_upload_items(data: Any) -> list[dict[str, Any]]:
         """Сервер загрузки отвечает то плоским объектом, то списком — приводим к одному виду."""
+        if isinstance(data, list):
+            return [i for i in data if isinstance(i, dict)]
+        if not isinstance(data, dict):
+            return []
         for key in ("images", "photos"):
             items = data.get(key)
             if isinstance(items, list):
@@ -312,12 +332,14 @@ class VKPublisher:
         return []
 
     @staticmethod
-    def _upload_error(data: dict[str, Any]) -> tuple[int, str]:
+    def _upload_error(data: Any) -> tuple[int, str]:
         """Достать код ошибки из ответа временного сервера.
 
         api.vk.com оборачивает ошибку в поле `error`, а upload.php отдаёт её
         плоским словарём (`{"error_code":107,"error_msg":...}`) — учитываем оба.
         """
+        if not isinstance(data, dict):
+            return 0, ""
         error = data.get("error")
         if isinstance(error, dict):
             return int(error.get("error_code") or 0), str(error.get("error_msg") or "")
@@ -326,6 +348,32 @@ class VKPublisher:
         if "error_code" in data or "error_msg" in data:
             return int(data.get("error_code") or 0), str(data.get("error_msg") or "")
         return 0, ""
+
+    @staticmethod
+    def _saved_photos(saved: Any) -> list[dict[str, Any]]:
+        """Привести ответ photos.saveWallPhoto к списку снимков.
+
+        Варианты ответа VK: массив фото (user-ключ), объект с `items`/`photos`
+        (ключ сообщества / новый формат), плоский снимок со старыми `pid`/`photo`/
+        `hash`, а также завёрнутый `{"photo": {...}}`.
+        """
+        if isinstance(saved, list):
+            raw: list[Any] = saved
+        elif isinstance(saved, dict):
+            items = saved.get("items") or saved.get("photos")
+            raw = list(items) if isinstance(items, list) else [saved]
+        else:
+            raw = []
+        photos: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            inner = item.get("photo")
+            # старый формат: `photo` — строка-ссылка, новый: вложенный объект снимка
+            photo = inner if isinstance(inner, dict) else item
+            if photo.get("id") or photo.get("pid"):
+                photos.append(photo)
+        return photos
 
     def upload_photo(self, path: Path | str) -> str:
         """Загрузить один файл и вернуть attachment вида `photo<owner_id>_<id>`."""
@@ -382,13 +430,17 @@ class VKPublisher:
                 server=items[0].get("server"),
                 hash=items[0].get("hash"),
             )
-            photos = saved.get("items") if isinstance(saved, dict) else None
-            if not photos:  # старая форма ответа
-                photos = (saved or {}).get("photos") or []
+            photos = self._saved_photos(saved)
             if not photos:
-                raise VkError(f"photos.saveWallPhoto не вернул снимок: {saved}")
+                raise VkError(f"photos.saveWallPhoto не вернул снимок: {str(saved)[:200]}")
             photo = photos[0]
-            attachment = f"photo{photo.get('owner_id')}_{photo.get('id') or photo.get('pid')}"
+            photo_id = photo.get("id") or photo.get("pid")
+            # в старом формате owner_id отсутствует: снимок лежит на стене сообщества,
+            # куда его отдавал getWallUploadServer(group_id=...)
+            owner_id = photo.get("owner_id") or (-(self._group_id or 0))
+            if not photo_id or not owner_id:
+                raise VkError(f"photos.saveWallPhoto вернул снимок без id/owner_id: {str(photo)[:200]}")
+            attachment = f"photo{owner_id}_{photo_id}"
             # сбрасываем кэш сервера: upload_url одноразовый по факту
             self._upload_server = {}
             return attachment
@@ -552,7 +604,7 @@ class VKPublisher:
                 disable_comments=1 if self.vk.disable_comments else None,
             )
         result.message = message
-        post_id = str((response or {}).get("post_id") or "")
+        post_id = str(response.get("post_id") or "") if isinstance(response, dict) else ""
         result.ok = bool(post_id)
         result.post_id = post_id
         result.attachments = attachments
@@ -629,7 +681,7 @@ class VKPublisher:
                 attachments.append(attachment)
         response = self._call("wall.post", owner_id=self.owner_id, from_group=1,
                               message=text, attachments=",".join(attachments) or None)
-        post_id = str((response or {}).get("post_id") or "")
+        post_id = str(response.get("post_id") or "") if isinstance(response, dict) else ""
         return PostResult(avito_id="", ok=bool(post_id), post_id=post_id,
                           post_url=self.wall_url(post_id) if post_id else "",
                           message=text, attachments=attachments)

@@ -25,6 +25,7 @@ import hmac
 import io
 import json
 import secrets
+import sys
 import threading
 import time
 import traceback
@@ -132,6 +133,23 @@ def post_payload(result) -> dict:
     }
 
 
+def tail_traceback(depth: int = 5) -> str:
+    """Хвост трейсбека для журнала задачи.
+
+    limit=2 у format_exc показывал только кадры сервиса: настоящий источник
+    ошибки (например, внутри vk_publisher) оставался за кадром.
+    """
+    exc_type, exc_value, tb = sys.exc_info()
+    frames = traceback.extract_tb(tb)[-depth:] if tb is not None else []
+    lines = ["Traceback (most recent call last):"]
+    for frame in frames:
+        lines.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n')
+        lines.append(f"    {frame.line or ''}\n")
+    if exc_type is not None:
+        lines.extend(traceback.format_exception_only(exc_type, exc_value))
+    return "".join(lines).rstrip()
+
+
 class PublishService:
     """Постинг в сообщество VK: один клиент и одна очередь на все запросы."""
 
@@ -231,7 +249,8 @@ class PublishService:
         except Exception as exc:  # не роняем сервер ради одной задачи
             job.status = "error"
             job.error = f"{type(exc).__name__}: {exc}"
-            job.log.append(traceback.format_exc(limit=2))
+            logger.error("Задача %s (%s) упала", job.id, job.params, exc_info=True)
+            job.log.append(tail_traceback())
         finally:
             job.elapsed = (datetime.now() - started).total_seconds()
 
@@ -404,7 +423,8 @@ class ParseService:
             job.status = "error"
             job.error = f"{type(exc).__name__}: {exc}"
             job.log.append("Исключение: " + job.error)
-            job.log.append(traceback.format_exc(limit=2))
+            logger.error("Парсинг %s упал", job.id, exc_info=True)
+            job.log.append(tail_traceback())
             self._close_scraper()
         finally:
             job.elapsed = (datetime.now() - started).total_seconds()

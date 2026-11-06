@@ -49,12 +49,24 @@ class FakeSession:
                 return FakeResponse({"error_code": 107, "error_msg": "Duplicate image"})
             return FakeResponse({"photo": "12345abcdef", "server": 2152, "hash": "deadbeef"})
         if method == "groups.getById":
-            return FakeResponse({"response": {"groups": [{"id": 1900123456, "name": "Авто из Авито",
-                                                          "screen_name": "avito_auto", "is_admin": 1}]}})
+            group = {"id": 1900123456, "name": "Авто из Авито",
+                     "screen_name": "avito_auto", "is_admin": 1}
+            if self.scenario == "user_token":
+                # ключ standalone-приложения: response в форме {count, items}
+                return FakeResponse({"response": {"count": 1, "items": [group]}})
+            return FakeResponse({"response": {"groups": [group]}})
         if method == "photos.getWallUploadServer":
             return FakeResponse({"response": {"upload_url": "https://pu.vk.com/upload.php?act=do_add",
                                               "user_id": 1900123456, "album_id": -1900123456}})
         if method == "photos.saveWallPhoto":
+            if self.scenario == "user_token":
+                # так отвечает VK на user-ключ: массив готовых объектов фото
+                return FakeResponse({"response": [{"id": 100200, "owner_id": -1900123456,
+                                                   "album_id": -1900123456, "photo_807": "https://pp"}]})
+            if self.scenario == "legacy":
+                # старый плоский формат без owner_id
+                return FakeResponse({"response": [{"aid": -1900123456, "pid": 100200,
+                                                   "photo": "https://pp/x.jpg", "hash": "deadbeef"}]})
             return FakeResponse({"response": {"count": 1,
                                               "items": [{"id": 100200, "owner_id": -1900123456}]}})
         if method == "wall.post":
@@ -176,6 +188,23 @@ try:
     raise AssertionError("ожидался VkError")
 except VkError as exc:
     print("\n[без токена]", exc)
+pub.close(); db.close()
+
+# 8. user-ключ standalone-приложения: groups.getById через items, saveWallPhoto массивом
+CALLS.clear()
+cfg, db, pub = fresh("user_token")
+res = pub.post_ad(make_ad(real_photos))
+print("\n[user_token]", {k: v for k, v in res.as_dict().items() if k != "message"})
+assert res.ok and res.attachments[0] == "photo-1900123456_100200", res
+assert res.post_url == "https://vk.com/wall-1900123456_77", res.post_url
+pub.close(); db.close()
+
+# 9. старый плоский ответ saveWallPhoto без owner_id — берём id сообщества
+CALLS.clear()
+cfg, db, pub = fresh("legacy")
+res = pub.post_ad(make_ad(real_photos))
+print("[legacy]", res.attachments[:1], res.post_url)
+assert res.ok and res.attachments[0] == "photo-1900123456_100200", res
 pub.close(); db.close()
 
 print("\nВСЕ ПРОВЕРКИ ПРОШЛИ")
