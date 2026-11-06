@@ -1,0 +1,64 @@
+{% if proxies %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Прокси</th><th>Статус</th><th>Проверен</th><th>Успешно / ошибок</th><th>Браузер</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for proxy in proxies %}
+      <tr>
+        <td>
+          <span class="mono">{{ proxy.display }}</span>
+          <div class="muted small">{{ proxy.get_scheme_display }}
+            {% if not proxy.is_active %} · выключен{% endif %}
+          </div>
+          {% if proxy.last_error %}<div class="error-text small">{{ proxy.last_error|truncatechars:120 }}</div>{% endif %}
+        </td>
+        <td>
+          {% if proxy.status == 'ok' %}
+            <span class="status status-done">{{ proxy.get_status_display }}</span>
+          {% elif proxy.status == 'bad' %}
+            <span class="status status-error">{{ proxy.get_status_display }}</span>
+          {% else %}
+            <span class="status status-queued">{{ proxy.get_status_display }}</span>
+          {% endif %}
+        </td>
+        <td class="muted small">{{ proxy.last_checked_at|date:"d.m.Y H:i"|default:"—" }}</td>
+        <td class="small">{{ proxy.success_count }} / {{ proxy.fail_count }}</td>
+        <td>
+          {% if proxy.browser_supported %}
+            <span class="status status-done">да</span>
+          {% else %}
+            <span class="status status-warning">только requests</span>
+          {% endif %}
+        </td>
+        <td class="right">
+          <div class="actions" style="justify-content:flex-end; margin:0">
+            <form method="post" style="display:inline">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="check_proxy">
+              <input type="hidden" name="proxy_id" value="{{ proxy.pk }}">
+              <button class="btn btn-small" type="submit">Проверить</button>
+            </form>
+            <form method="post" style="display:inline">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="toggle_proxy">
+              <input type="hidden" name="proxy_id" value="{{ proxy.pk }}">
+              <button class="btn btn-small" type="submit">{% if proxy.is_active %}Выключить{% else %}Включить{% endif %}</button>
+            </form>
+            <form method="post" style="display:inline">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="delete_proxy">
+              <input type="hidden" name="proxy_id" value="{{ proxy.pk }}">
+              <button class="btn btn-small btn-neg" type="submit">Удалить</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">Прокси пока нет. Пул пуст — работаем напрямую.</p>
+{% endif %}

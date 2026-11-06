@@ -1,0 +1,36 @@
+{% extends "web/base.html" %}
+{% block content %}
+<section class="card">
+  <div class="card-head"><h2>История публикаций</h2></div>
+  {% if items %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Объявление</th><th>Сообщество</th><th>Статус</th><th>Попытки</th><th>Создана</th><th>Пост</th></tr></thead>
+        <tbody>
+        {% for item in items %}
+          <tr>
+            <td>
+              <a class="link" href="{% url 'web:ad_detail' item.ad_id %}">{{ item.ad.title|default:item.ad.avito_id }}</a>
+              <div class="muted small">{{ item.ad.price_text }}</div>
+            </td>
+            <td>{{ item.community.name }}</td>
+            <td><span class="status status-{{ item.status }}">{{ item.get_status_display }}</span></td>
+            <td>{{ item.attempts }}</td>
+            <td class="muted">{{ item.created_at|date:"d.m.Y H:i" }}</td>
+            <td>
+              {% if item.vk_post_url %}
+                <a class="link" href="{{ item.vk_post_url }}" target="_blank" rel="noopener">Открыть</a>
+              {% elif item.error %}
+                <span class="error-text" title="{{ item.error }}">{{ item.error|truncatechars:50 }}</span>
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty">Публикаций пока нет.</p>
+  {% endif %}
+</section>
+{% endblock %}

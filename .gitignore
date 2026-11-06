@@ -1,28 +1,27 @@
+# Локальные секреты
+.env
+
 # Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-*.egg-info/
 
-# Секреты и локальная конфигурация
-.env
-
-# Данные рантайма
-avito.db
-*.db
-data/photos/
-data/tmp/
-profile-*/
-logs/
-mvp_v0/
-out/
-*.log
-*.csv
-*.json
-!package.json
+# Данные и медиа
+data/
+staticfiles/
 
 # IDE / OS
 .idea/
 .vscode/
 .DS_Store
+
+# Ruff
+.ruff_cache/
+
+# Локальный запуск
+run/
+
+# Локальный Caddyfile с доменом
+Caddyfile
+backups/

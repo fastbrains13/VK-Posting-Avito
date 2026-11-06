@@ -1,39 +1,59 @@
-# =========================================================
-# Оркестрация Avito Parser + VK Publisher
-# Сервис webui; Caddy включается профилем domain при установке с доменом.
-# =========================================================
-
+# MVP v0: web + worker + PostgreSQL.
+# Запуск: cp .env.example .env && docker compose up --build
 services:
-  webui:
-    build: .
-    container_name: avito_webui
+  db:
+    image: postgres:16-alpine
+    container_name: avito_mvp_db
     restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-avito_mvp}
+      POSTGRES_USER: ${POSTGRES_USER:-avito}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-avito} -d ${POSTGRES_DB:-avito_mvp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    build: .
+    container_name: avito_mvp_web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      CHROME_BIN: /usr/bin/chromium
+      CHROMEDRIVER_PATH: /usr/bin/chromedriver
     ports:
       - "127.0.0.1:8000:8000"
-    env_file:
-      - .env
-    environment:
-      - HEADLESS_MODE=true
-      - DB_PATH=data/avito.db
-      - PHOTOS_DIR=data/photos
-      - LOG_FILE=logs/avito_parser.log
     volumes:
       - ./data:/app/data
-      - ./logs:/app/logs
-    command: python webui.py --host 0.0.0.0 --port 8000
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/"]
-      interval: 30s
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/login/"]
+      interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 10
+    shm_size: "1gb"
 
   caddy:
     image: caddy:2
-    container_name: avito_caddy
+    container_name: avito_mvp_caddy
     profiles: ["domain"]
     restart: unless-stopped
     depends_on:
-      - webui
+      web:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:-}
     ports:
       - "80:80"
       - "443:443"
@@ -43,6 +63,27 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
+  worker:
+    build: .
+    container_name: avito_mvp_worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      CHROME_BIN: /usr/bin/chromium
+      CHROMEDRIVER_PATH: /usr/bin/chromedriver
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    command: python manage.py worker
+    shm_size: "1gb"
+
 volumes:
+  pgdata:
   caddy_data:
   caddy_config:

@@ -1,0 +1,68 @@
+{% extends "web/base.html" %}
+{% block content %}
+<div class="two-col">
+  <section class="card">
+    <div class="card-head"><h2>Ссылка на выдачу</h2></div>
+    <p class="muted">
+      Парсится ровно эта страница. Пагинации нет: если нужны следующие страницы,
+      добавьте отдельную ссылку позже (в MVP — одна).
+    </p>
+    <form method="post" class="form-grid">
+      {% csrf_token %}
+      <label class="field field-wide">
+        <span>{{ form.url.label }}</span>
+        {{ form.url }}
+        {% if form.url.errors %}<em class="error-text">{{ form.url.errors|striptags }}</em>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.city.label }}</span>
+        {{ form.city }}
+        <small>Свободный текст. URL не переписывается.</small>
+      </label>
+      <label class="field">
+        <span>{{ form.title.label }}</span>
+        {{ form.title }}
+      </label>
+      <button class="btn btn-primary" type="submit">Сохранить источник</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Текущий источник</h2></div>
+    {% if source %}
+      <dl class="facts">
+        <div><dt>Ссылка</dt><dd><a class="link" href="{{ source.url }}" target="_blank" rel="noopener">{{ source.url }}</a></dd></div>
+        <div><dt>Город</dt><dd>{{ source.city|default:"—" }}</dd></div>
+        <div><dt>Название</dt><dd>{{ source.title|default:"—" }}</dd></div>
+        <div><dt>Последний парсинг</dt><dd>{{ source.last_parsed_at|date:"d.m.Y H:i"|default:"ещё не было" }}</dd></div>
+        <div><dt>Статус</dt><dd>{{ source.last_status|default:"—" }}</dd></div>
+      </dl>
+      {% if source.last_error %}<div class="message error">{{ source.last_error }}</div>{% endif %}
+      <div class="actions">
+        <form method="post" action="{% url 'web:parse_source' %}">
+          {% csrf_token %}
+          <button class="btn btn-primary" type="submit" {% if not community %}disabled{% endif %}>
+            Загрузить объявления
+          </button>
+        </form>
+        <a class="btn" href="{% url 'web:ads' %}">К объявлениям</a>
+      </div>
+      {% if not community %}
+        <p class="hint warn">Сначала выберите сообщество VK — без него публикация недоступна.</p>
+      {% endif %}
+    {% else %}
+      <p class="empty">Источник ещё не добавлен.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head"><h2>Как это работает</h2></div>
+  <ol class="plain-list">
+    <li>Сохраните ссылку на страницу выдачи Авито.</li>
+    <li>Нажмите «Загрузить объявления» — воркер соберёт карточки только с этой страницы.</li>
+    <li>Откройте объявление, загрузите описание и фото, проверьте предпросмотр.</li>
+    <li>Нажмите «Опубликовать» — пост уйдёт в выбранное сообщество.</li>
+  </ol>
+</section>
+{% endblock %}

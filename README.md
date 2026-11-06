@@ -1,240 +1,396 @@
-# Avito Parser + VK Publisher
+# Avito → VK · MVP
 
-Парсер объявлений Авито (Selenium) с автоматической публикацией в сообщество ВКонтакте.
-Работает из CLI, через веб-админку или в Docker. Все параметры правятся в разделе
-**Настройки** админки; `.env` — стартовые значения, править код для смены настроек не нужно.
+Парсер Авито и ручная публикация объявлений в сообщество ВКонтакте с фотографиями.
 
-## Что внутри
+Сейчас это осознанно узкий MVP:
 
-| Файл / пакет | Назначение |
-|---|---|
-| `main.py` | CLI: парсинг выдачи/карточек, сохранение в БД, постинг в VK |
-| `publisher.py` | CLI: публикация из `avito.db` в VK (один пост, очередь, watch, тест) |
-| `webui.py` | Веб-админка (stdlib `http.server`), фоновый крон (парсинг → постинг) |
-| `webui_page.py` | HTML/CSS/JS интерфейса админки |
-| `avito_parser/` | Пакет ядра |
-| `avito_parser/config.py` | Конфиг из `.env` (парсер, браузер, VK, админка) |
-| `avito_parser/settings.py` | Реестр настроек админки: типы, подписи, группы формы, наложение на `.env` |
-| `avito_parser/browser.py` | Запуск Chrome (anti-detect, UA-ротация, прокси-пул, fallback на прямой IP) |
-| `avito_parser/human.py` | Имитация поведения человека (случайные задержки, скролл) |
-| `avito_parser/scraper.py` | Парсинг выдачи и карточек (Selenium) |
-| `avito_parser/photos.py` | Скачивание фотографий объявления |
-| `avito_parser/database.py` | SQLite `avito.db`, дедупликация, источники, настройки админки |
-| `avito_parser/export.py` | Выгрузка в CSV / JSON |
-| `avito_parser/vk_publisher.py` | Публикация объявлений в VK (фото + текст + ссылка) |
-| `tests/vk_flow_test.py` | Тест VK-флоу (dry-run + group-check на заглушках) |
+- один пользовательский токен VK;
+- одно сообщество;
+- одна ссылка на выдачу Авито;
+- парсится только указанная страница, без пагинации;
+- объявления открываются по одному, детали и фото загружаются по требованию;
+- публикация только ручная;
+- один пост на пару «объявление + сообщество», без повторов;
+- фото до 10 штук, как в VK.
 
-## Быстрый старт
+## Возможности
 
-### 1. Виртуальное окружение
+- вход в админку под Django-auth;
+- добавление пользовательского токена VK и выбор сообщества, где пользователь администратор;
+- проверка права на постинг и загрузку фото;
+- источник Авито: ссылка на выдачу и город;
+- парсинг карточек выдачи;
+- загрузка описания, цены, локации и фотографий объявления;
+- предпросмотр поста: заголовок, цена, описание, ссылка;
+- публикация с фото и ссылкой;
+- защита от повторной публикации;
+- соблюдение интервала между постами;
+- очередь ручных задач, журнал и логи;
+- единый пул HTTP/SOCKS4/SOCKS5-прокси с проверкой и ротацией;
+- настройки сообщества и прокси из веб-интерфейса;
+- PostgreSQL в Docker, SQLite для локальной разработки.
+
+## Стек
+
+- Python 3.12
+- Django 5.1
+- PostgreSQL 16 (Docker) / SQLite (локально)
+- Selenium + Chromium
+- requests + PySocks
+- Gunicorn + WhiteNoise
+- Docker Compose
+- Caddy — опционально, для HTTPS и домена
+
+## Структура
+
+```text
+.
+├── manage.py
+├── config/                 # settings, urls, wsgi
+├── core/                   # VKAccount, VKCommunity, ProxyEndpoint, JobRun
+│   ├── models.py
+│   ├── proxies.py          # разбор, проверка, ротация прокси
+│   ├── crypto.py           # шифрование токенов
+│   └── management/commands/import_proxies.py
+├── avito/                  # AvitoSource, Ad, AdPhoto, Selenium-клиент
+├── publishing/             # Publication, VK-клиент, рендер, публикация
+├── jobs/                   # воркер и обработчики задач
+├── web/                    # страницы, формы, шаблоны, static
+├── data/                   # media/, chrome-profile/ (volume, не в git)
+├── docker-compose.yml
+├── Dockerfile
+├── Caddyfile.example
+├── .env.example
+├── AGENTS.md
+└── README.md
+```
+
+## Быстрый старт локально (SQLite)
+
+Нужны Python 3.12+ и Chrome/Chromium для Selenium.
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate          # macOS / Linux
-# .venv\Scripts\activate          # Windows
+source .venv/bin/activate
 pip install -r requirements.txt
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver 127.0.0.1:8000
 ```
 
-### 2. Конфигурация
+В отдельном терминале:
+
+```bash
+source .venv/bin/activate
+python manage.py worker
+```
+
+Если `.env` отсутствует, используется SQLite `data/db.sqlite3`. Откройте http://127.0.0.1:8000.
+
+Локальный запуск в фоне:
+
+```bash
+./run_local.sh
+./stop_local.sh
+```
+
+Логи: `run/server.log`, `run/worker.log`.
+
+## Требования к серверу
+
+| Параметр | Минимум | Рекомендуется |
+|---|---|---|
+| ОС | Ubuntu 22.04/24.04, Debian 12 | Ubuntu 24.04 LTS |
+| CPU | 1 vCPU | 2 vCPU |
+| RAM | **2 ГБ** | **4 ГБ** |
+| Swap | 1–2 ГБ | 2 ГБ |
+| Диск | 20 ГБ SSD | 40 ГБ SSD |
+| Docker | Docker Engine + Compose v2 | актуальные |
+| Сеть | исходящий HTTPS | + домен для HTTPS |
+| Порты | 22 (SSH) | 80/443 при домене |
+
+Chromium в пике потребляет 600–900 МБ. На сервере с 1 ГБ RAM без swap контейнеры будут падать по OOM. Если RAM меньше 4 ГБ, swap обязателен.
+
+Входящий порт 8000 не открывается наружу: веб слушает `127.0.0.1:8000`. Доступ — через SSH-туннель или Caddy.
+
+Нужен исходящий HTTPS к:
+
+- `www.avito.ru`, `*.avito.st` — парсинг и фото;
+- `api.vk.com`, `pu.vk.com`, `oauth.vk.com` — VK API и загрузка фото.
+
+## Развёртывание на сервере (пошагово)
+
+Ниже — Ubuntu 22.04/24.04, каталог `/opt/avito`, доступ по SSH.
+
+### Шаг 1. Подготовка сервера
+
+```bash
+sudo apt-get update && sudo apt-get upgrade -y
+sudo apt-get install -y ca-certificates curl git ufw
+sudo timedatectl set-timezone Europe/Moscow
+```
+
+Если RAM меньше 4 ГБ, добавьте swap:
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+Проверка:
+
+```bash
+free -h
+swapon --show
+df -h /
+```
+
+### Шаг 2. Установка Docker
+
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+| sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+docker compose version
+```
+
+### Шаг 3. Код проекта
+
+```bash
+sudo mkdir -p /opt/avito
+sudo chown "$USER":"$USER" /opt/avito
+git clone <URL_РЕПОЗИТОРИЯ> /opt/avito
+cd /opt/avito
+```
+
+Если репозиторий уже скопирован — просто перейдите в каталог.
+
+### Шаг 4. Настройки `.env`
 
 ```bash
 cp .env.example .env
+chmod 600 .env
 ```
 
-Минимально необходимые значения в `.env`:
-
-- **VK** — `VK_ACCESS_TOKEN` (ключ сообщества с правами `photos, wall, groups`) и `VK_GROUP_ID=public123456789`
-- **Админка** — `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_SECRET` (длинный случайный hex)
-
-Ссылки для парсинга в `.env` не задаются: после входа в админку добавьте их в разделе
-**Источники** (таблица `sources`). Остальные параметры — задержки, прокси, шаблоны поста,
-интервалы крона — при желании правятся там же в **.env** или прямо в разделе **Настройки**.
-
-Оставшиеся после первого запуска изменения из админки хранятся в SQLite и перекрывают
-`.env` — переменные окружения остаются запасным входом и стартовыми значениями.
-
-### 3. Запуск
-
-#### CLI — разовый прогон
+Сгенерируйте секреты:
 
 ```bash
-python main.py --details --photos --publish
+openssl rand -base64 48     # DJANGO_SECRET_KEY
+openssl rand -base64 24     # POSTGRES_PASSWORD
+openssl rand -base64 32 | tr '+/' '-_'   # TOKEN_ENCRYPTION_KEY
 ```
 
-#### CLI — режим мониторинга (парсинг + постинг каждые N минут)
+Заполните `.env`:
+
+```dotenv
+DEBUG=0
+DJANGO_SECRET_KEY=<длинная случайная строка>
+ALLOWED_HOSTS=127.0.0.1,localhost
+CSRF_TRUSTED_ORIGINS=
+HTTPS=0
+DOMAIN=
+
+POSTGRES_DB=avito_mvp
+POSTGRES_USER=avito
+POSTGRES_PASSWORD=<случайный пароль>
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+
+TOKEN_ENCRYPTION_KEY=<fernet-ключ>
+```
+
+`TOKEN_ENCRYPTION_KEY` нельзя менять после первой публикации: сохранённые токены VK перестанут расшифровываться. Сохраните его в менеджере секретов.
+
+### Шаг 5. Права на данные
+
+Контейнер работает от UID 1000. Создайте каталог и отдайте его этому пользователю:
 
 ```bash
-python main.py --watch 900 --details --photos --publish
+mkdir -p data
+sudo chown -R 1000:1000 data
 ```
 
-#### Веб-админка
+### Шаг 6. Запуск
+
+Вариант A — доступ через SSH-туннель, без домена:
 
 ```bash
-python webui.py --host 0.0.0.0 --port 8000
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=50 web
 ```
 
-Откройте `http://localhost:8000`. Флаги для отладки:
-- `--no-auth` — без входа (локально!)
-- `--no-cron` — без фоновых задач (парсинг/постинг по кнопкам)
+Вариант B — домен и HTTPS через Caddy:
 
-#### Docker
+1. Направьте A/AAAA-запись домена на IP сервера.
+2. В `.env` укажите:
+
+```dotenv
+DOMAIN=admin.example.com
+ALLOWED_HOSTS=admin.example.com,localhost
+CSRF_TRUSTED_ORIGINS=https://admin.example.com
+HTTPS=1
+```
+
+3. Скопируйте Caddyfile и запустите профиль `domain`:
 
 ```bash
-docker compose up --build
+cp Caddyfile.example Caddyfile
+docker compose --profile domain up -d --build
+docker compose ps
 ```
 
-Контейнер `avito_webui`: порт 8000, healthcheck каждые 30 с, данные на хосте через `./data` и `./logs`.
+Caddy сам получит TLS-сертификат. Откройте `https://admin.example.com`.
 
-**Подробное развёртывание на боевом сервере** (подготовка, `.env`, доступ через SSH-туннель,
-обновление, бэкапы, типовые проблемы) — [DEPLOY.md](DEPLOY.md).
-
-## CLI-справка
-
-### main.py — парсер
-
-```
-python main.py "https://..." "https://..."          # парсить указанные
-python main.py                                       # из включённых источников БД
-python main.py --urls-file urls.txt                  # список ссылок из файла
-python main.py --details --photos                    # с описанием и фото
-python main.py --publish                             # сразу постить в VK
-python main.py --publish-dry-run                     # собрать посты, не отправляя
-python main.py --watch 900 --details --photos --publish  # дежурный режим, 15 мин
-python main.py --csv out.csv --json out.json         # выгрузить результат
-python main.py --stats                               # статистика базы
-```
-
-### publisher.py — постинг в VK
-
-```
-python publisher.py --check                 # проверить токен и права сообщества
-python publisher.py --preview               # тексты постов без отправки
-python publisher.py --publish               # выложить всю очередь
-python publisher.py --publish --limit 5     # только 5 постов
-python publisher.py --publish --dry-run     # собрать, не отправляя
-python publisher.py --ad 8309226157         # одно объявление
-python publisher.py --watch                 # дежурить: постить новые
-python publisher.py --test "Тестовый пост"  # произвольный тестовый пост
-python publisher.py --delete POST_ID        # удалить пост со стены
-python publisher.py --stats                 # статистика очереди
-```
-
-## Веб-админка
-
-7 разделов:
-
-1. **Дашборд** — KPI (всего / в очереди / опубликовано / недолитые), конвейер (источники → очередь → VK), последние объявления, последние посты, расписание крона
-2. **Объявления** — счётчики-фильтры (все / в очереди / опубликованные / недолитые), поиск, пагинация, действия (Опубликовать / В очередь / Удалить), экспорт CSV
-3. **Источники** — список отслеживаемых ссылок, статистика прогона, вкл/выкл, удалить, разовый парсинг произвольной ссылки
-4. **VK-канал** — состояние (сообщество, токен, фото), предпросмотр следующего поста, история опубликованных, настройки (интервал, пачка, только фото, OAuth-ключ)
-5. **Задачи** — журнал всех фоновых задач с раскрываемыми логами
-6. **Логи** — хвост `avito_parser.log`, авто-обновление, скачивание файла
-7. **Настройки** — все параметры парсера, браузера, прокси, VK и системы; перекрывают `.env`
-
-### Постинг с фото
-
-VK запрещает загрузку фото ключами сообщества (код ошибки 27). Для постов с картинками нужен **user-ключ standalone-приложения**.
-
-1. В разделе **VK-канал** нажмите «Получить user-ключ (для фото)» — откроется OAuth-диалог VK
-2. Разрешите права: `photos, wall, groups, offline`
-3. Скопируйте `access_token=...` из адресной строки
-4. Вставьте в поле «VK: ключ доступа» → «Сохранить»
-5. Включите «Только посты с фото» → «Сохранить»
-
-### Настройки
-
-Раздел **Настройки** — форма, собранная из реестра `avito_parser/settings.py`: 50 параметров
-в 9 группах (расписание, парсинг, браузер, прокси, блокировки, ВКонтакте, очередь публикации,
-система, доступ). Приоритет значений:
-
-```
-сохранённое в таблице settings (SQLite)  →  переменная окружения (.env)  →  дефолт из кода
-```
-
-- Пустое поле параметр не перекрывает — значение остаётся из `.env`.
-- Сохранённые в базе поля помечены в форме, подзаголовком считается «N из 50 сохранено в базе».
-- «Сбросить настройки» очищает таблицу — все поля возвращаются к значениям из `.env`.
-- Секреты (`vk_access_token`, `admin_password`) наружу не отдаются: вместо значения маска,
-  пустое поле означает «не менять».
-- Прокси для браузера — списком, по одному адресу на строку (`login:pass@ip:port`,
-  `socks5://ip:port`): это пул, из которого `browser.py` берёт живой адрес.
-- Параметры меняются на лету: крон перечитывает интервалы, VK-канал пересобирает ключ и шаблон,
-  браузер пересоздаётся при смене прокси/headless/таймаута. Логин, пароль и файл базы
-  применяются после перезапуска сервиса.
-
-В окружении не задаются только параметры админки: `parse_interval_min`, `publish_interval_min`,
-`cron_paused`, `first_run_limit`, `publish_batch` (дефолты — `database.py:DEFAULT_SETTINGS`).
-
-## Архитектура
-
-```
-.env ─────────────→ Config.load() ──→ ParserConfig / VkConfig / BrowserConfig
-settings (SQLite) ─→ settings.apply_db_settings() ─┘   (приоритет БД → .env → код)
-                                    ──→ Database   (SQLite avito.db, WAL)
-                                    ──→ AvitoScraper (Selenium, browser.py, human.py, photos.py)
-                                    ──→ VKPublisher  (photos.getWallUploadServer, wall.post)
-
-webui.py (stdlib http.server)
-  ├─ Handler: GET/POST → /api/*, /export.csv, /login, /logout
-  ├─ ParseService  (submit → Job → _run в фоне)
-  ├─ PublishService (submit/submit_one → Job → _publish в фоне)
-  └─ SchedulerService (cycle: parse → publish → sleep)
-
-main.py / publisher.py — standalone CLI, не зависят от webui
-```
-
-## Известные ограничения
-
-- **Фото через community-токен невозможны.** `photos.getWallUploadServer` возвращает код 27 для любых ключей сообщества (подтверждено VKCOM/vk-api-schema#242). Только user-ключ standalone-приложения.
-- **wall.delete не работает с group-токеном.** Тестовые посты удаляются только вручную через интерфейс VK.
-- **Прокси-пул.** Если все SOCKS5-прокси забанены, парсер падает на прямой IP (конфиг `PROXY_ALLOW_DIRECT=True`). Прямой IP Авито тоже банит (`ip_block`). Нужны свежие, не-датацентровые прокси.
-- **1 CPU / 1 ГБ.** На сервере крон живёт внутри `webui.py` — отдельный worker не запускается, чтобы не спорить за память.
-
-## Тесты
+### Шаг 7. Администратор
 
 ```bash
-.venv/bin/python tests/settings_test.py
-.venv/bin/python tests/vk_flow_test.py
+docker compose exec web python manage.py createsuperuser
 ```
 
-`tests/settings_test.py` — проверяет реестр настроек на временной базе: без строк в БД
-параметры не трогают `.env`, сохранённые значения ложатся в `Config` (включая прокси-пул
-списком), очищенное поле возвращается к окружению, форма отдаёт все 50 ключей, маска секрета
-не содержит самого ключа, а разметка `SETTINGS_PAGE` рисует поле для каждой настройки.
+### Шаг 8. Доступ
 
-`tests/vk_flow_test.py` — smoke-тест VK-флоу. Подменяет `requests.Session` фиктивным
-клиентом, который отвечает ровно теми формами, что отдаёт VK, и проверяет 7 сценариев:
-
-| # | Сценарий | Что проверяется |
-|---|---|---|
-| 1 | `ok` | загрузка фото → `wall.post` → отметка в БД; в загрузку файла не попадает `access_token` |
-| 2 | `dup_photo` | дубликат снимка (код 107) не роняет пост — пост уходит без вложений |
-| 2b | `dup_photo` + `require_photos` | пост осознанно пропускается, `wall.post` не вызывается |
-| 3 | `captcha` | `VkCaptchaRequired` с `captcha_sid`/`captcha_img` |
-| 4 | `spam` | `publish_pending` останавливает пачку, неудачный пост **не** отмечается опубликованным |
-| 5 | `flood` | код 6 → повтор внутри `_call` (2 вызова `wall.post`) |
-| 6 | `dry-run` | сеть не дёргается вообще (`CALLS == []`) |
-| 7 | без токена | понятная `VkError` вместо Traceback |
-
-Тест читает реальные jpg из `data/photos/*/*.jpg` (нужны хотя бы 3 файла) и пишет БД
-в `/tmp/vk_test.db`. Финальный вывод — `ВСЕ ПРОВЕРКИ ПРОШЛИ`.
-
-UI-смоук админки (headless Chrome, только read-only действия):
+Через SSH-туннель:
 
 ```bash
-python webui.py --no-auth --no-cron --port 8012 &
-node tests/ui_smoke.mjs http://127.0.0.1:8012/
-# на сервере — через SSH-туннель (см. DEPLOY.md):
-# ssh -p <порт> -N -L 8000:127.0.0.1:8000 root@<сервер>
-node tests/ui_smoke.mjs http://127.0.0.1:8000/ admin '<ADMIN_PASSWORD>'
+ssh -N -L 8000:127.0.0.1:8000 user@SERVER_IP
 ```
 
-## Связи с ТЗ
+Откройте http://127.0.0.1:8000.
 
-| Раздел ТЗ | Реализация |
-|---|---|
-| 2.1 Парсер выдачи и карточек | `avito_parser/scraper.py` (Selenium, JS-рендер) |
-| 2.2 Хранение в SQLite | `avito_parser/database.py` (WAL, дедупликация) |
-| 2.3 CLI с флагами | `main.py` (argparse, --watch, --details, --photos, --publish) |
-| 2.4 Публикация в VK | `avito_parser/vk_publisher.py` (wall.post, фото, тайминг) |
-| 2.5 Конфиг из окружения | `avito_parser/config.py` (`.env`, 20+ параметров) |
+Или домен: `https://admin.example.com`.
+
+### Шаг 9. Первичная настройка в интерфейсе
+
+1. «Подключение VK» → пользовательский токен VK.
+2. «Обновить список сообществ» → выбрать сообщество, где вы администратор.
+3. Если VK возвращает код 15 при публикации — добавить ключ сообщества:
+   сообщество → Управление → Работа с API → Создать ключ (права на стену).
+4. «Источник Авито» → ссылка на выдачу и город → «Загрузить объявления».
+5. Открыть объявление → «Загрузить описание и фото» → проверить предпросмотр.
+6. «Опубликовать».
+7. «Настройки» → при необходимости добавить прокси.
+
+### Шаг 10. Проверка воркера
+
+```bash
+docker compose logs -f worker
+```
+
+Воркер должен быть запущен всегда: без него парсинг и публикация останутся в очереди.
+
+### Шаг 11. Firewall
+
+```bash
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+sudo ufw status
+```
+
+Порт 8000 наружу не открывайте.
+
+## Обновление проекта
+
+```bash
+cd /opt/avito
+mkdir -p backups
+docker compose exec -T db pg_dump -U avito avito_mvp > "backups/db-$(date +%F-%H%M).sql"
+tar --exclude='data/chrome-profile' -czf "backups/data-$(date +%F-%H%M).tar.gz" data
+
+git pull
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=50 web worker
+```
+
+Миграции выполняются автоматически при старте `web`. Не используйте `docker compose down -v` — это удалит базу и media.
+
+## Бэкапы
+
+База:
+
+```bash
+mkdir -p backups
+docker compose exec -T db pg_dump -U avito avito_mvp > "backups/db-$(date +%F).sql"
+```
+
+Фото и данные:
+
+```bash
+tar --exclude='data/chrome-profile' -czf "backups/data-$(date +%F).tar.gz" data
+```
+
+Сохраняйте `.env`, `TOKEN_ENCRYPTION_KEY` и `DJANGO_SECRET_KEY` отдельно от сервера. Без ключа шифрования токены VK не восстановятся.
+
+Пример cron:
+
+```cron
+0 4 * * * cd /opt/avito && docker compose exec -T db pg_dump -U avito avito_mvp > backups/db-$(date +\%F).sql
+```
+
+## Прокси
+
+Прокси — единый пул для Авито и VK. Проверка идёт по обоим сервисам: рабочим считается только прокси, через который доступны и Авито, и VK API.
+
+В веб-интерфейсе:
+
+```text
+http://user:pass@1.2.3.4:8080
+socks5://user:pass@5.6.7.8:1080
+socks4://user:pass@9.10.11.12:4145
+1.2.3.4:1080
+```
+
+Для больших файлов:
+
+Локально:
+
+```bash
+python manage.py import_proxies ~/Downloads/data.txt --workers 100 --timeout 4
+python manage.py import_proxies ~/Downloads/data.txt --dry-run
+```
+
+На сервере в Docker:
+
+```bash
+docker compose cp ~/Downloads/data.txt web:/tmp/data.txt
+docker compose exec web python manage.py import_proxies /tmp/data.txt --workers 100 --timeout 4
+```
+
+Нерабочие новые прокси не добавляются. Кнопки «Проверить все» и «Удалить нерабочие» — в настройках.
+
+## Ограничения и известные проблемы
+
+- **Код 15 VK** — `wall.post` недоступен non-standalone приложению. Решение: ключ сообщества в настройках или standalone user token.
+- **Код 27 VK** — токен сообщества не умеет загружать фото. Фото загружаются только пользовательским токеном.
+- **Пустой `photo` / HTTP 405** — временное ограничение VK на загрузку фото. Смена прокси не помогает; нужно подождать, не спамить повторными публикациями.
+- **Авито-челлендж** — страница может требовать проверку безопасности; повторите позже. Постоянный профиль Chrome сохраняет куки.
+- **SOCKS5 с паролем** используется только в `requests`, не в Chrome. Для Chrome подходят HTTP и SOCKS без пароля.
+- **Один пост на пару «объявление + сообщество»** — намеренное ограничение MVP.
+- Публикация только ручная; планировщика и автопостинга пока нет.
+
+## Тесты и линтер
+
+```bash
+python manage.py test
+ruff check .
+```
+
+Внешние VK/Авито в тестах подменяются заглушками; реальные запросы не выполняются.
+
+## Документация для агентов
+
+Правила разработки и частые операции — в [AGENTS.md](AGENTS.md).

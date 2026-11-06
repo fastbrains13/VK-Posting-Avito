@@ -1,0 +1,7 @@
+# Скопируйте в Caddyfile и укажите свой домен.
+# В .env: DOMAIN=admin.example.com, ALLOWED_HOSTS=admin.example.com,localhost
+# CSRF_TRUSTED_ORIGINS=https://admin.example.com, HTTPS=1
+{$DOMAIN} {
+    encode gzip
+    reverse_proxy web:8000
+}

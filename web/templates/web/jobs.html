@@ -1,0 +1,27 @@
+{% extends "web/base.html" %}
+{% block content %}
+<section class="card">
+  <div class="card-head"><h2>Задачи</h2></div>
+  {% if items %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Тип</th><th>Статус</th><th>Прогресс</th><th>Создана</th><th></th></tr></thead>
+        <tbody>
+        {% for job in items %}
+          <tr>
+            <td class="mono">{{ job.pk }}</td>
+            <td>{{ job.get_kind_display }}</td>
+            <td><span class="status status-{{ job.status }}">{{ job.get_status_display }}</span></td>
+            <td class="muted">{{ job.progress|default:"—" }}</td>
+            <td class="muted">{{ job.created_at|date:"d.m.Y H:i" }}</td>
+            <td class="right"><a class="link" href="{% url 'web:job_detail' job.pk %}">Лог</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty">Задач пока нет.</p>
+  {% endif %}
+</section>
+{% endblock %}

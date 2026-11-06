@@ -1,0 +1,77 @@
+{% load static %}<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ title|default:"MVP" }} · Авито → VK{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="{% url 'web:dashboard' %}">
+      <span class="brand-mark">А→V</span>
+      <span class="brand-text">Авито → VK<small>MVP v0</small></span>
+    </a>
+
+    {% if active_community %}
+      <div class="side-community">
+        <span class="side-label">Сообщество</span>
+        <strong>{{ active_community.name }}</strong>
+        <span class="side-state {% if active_community.can_upload_photos %}ok{% else %}warn{% endif %}">
+          {% if active_community.can_upload_photos %}фото доступны{% else %}фото не проверены{% endif %}
+        </span>
+      </div>
+    {% endif %}
+
+    <nav class="nav">
+      <a href="{% url 'web:dashboard' %}" class="{% if request.resolver_match.url_name == 'dashboard' %}current{% endif %}">Обзор</a>
+      <a href="{% url 'web:connect' %}" class="{% if request.resolver_match.url_name == 'connect' %}current{% endif %}">Подключение VK</a>
+      <a href="{% url 'web:sources' %}" class="{% if request.resolver_match.url_name == 'sources' %}current{% endif %}">Источник Авито</a>
+      <a href="{% url 'web:ads' %}" class="{% if request.resolver_match.url_name == 'ads' or request.resolver_match.url_name == 'ad_detail' %}current{% endif %}">Объявления</a>
+      <a href="{% url 'web:publications' %}" class="{% if request.resolver_match.url_name == 'publications' %}current{% endif %}">Публикации</a>
+      <a href="{% url 'web:settings' %}" class="{% if request.resolver_match.url_name == 'settings' %}current{% endif %}">Настройки</a>
+      <a href="{% url 'web:jobs' %}" class="{% if request.resolver_match.url_name == 'jobs' or request.resolver_match.url_name == 'job_detail' %}current{% endif %}">Задачи</a>
+    </nav>
+
+    <div class="side-foot">
+      {% if user.is_authenticated %}
+        <span class="side-user">{{ user.get_username }}</span>
+        <form method="post" action="{% url 'web:logout' %}">
+          {% csrf_token %}
+          <button class="linklike" type="submit">Выйти</button>
+        </form>
+      {% endif %}
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <span class="eyebrow">Ручной режим</span>
+        <h1>{{ title|default:"Обзор" }}</h1>
+      </div>
+      <div class="topbar-right">
+        {% if active_community %}
+          <a class="pill pill-ok" href="{% url 'web:connect' %}">{{ active_community.name }}</a>
+        {% else %}
+          <a class="pill pill-warn" href="{% url 'web:connect' %}">VK не подключён</a>
+        {% endif %}
+      </div>
+    </header>
+
+    {% if messages %}
+      <div class="messages">
+        {% for message in messages %}
+          <div class="message {{ message.tags }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<script src="{% static 'js/app.js' %}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

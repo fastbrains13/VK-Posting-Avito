@@ -1,0 +1,40 @@
+{% extends "web/base.html" %}
+{% block content %}
+<section class="card" data-job-id="{{ job.pk }}" data-next-url="{{ next_url }}">
+  <div class="card-head">
+    <div>
+      <h2>{{ job.get_kind_display }} #{{ job.pk }}</h2>
+      <p class="muted">Создана {{ job.created_at|date:"d.m.Y H:i:s" }}</p>
+    </div>
+    <span id="job-status" class="status status-{{ job.status }}">{{ job.get_status_display }}</span>
+  </div>
+
+  <p id="job-progress" class="job-progress">{{ job.progress|default:"Ожидает выполнения…" }}</p>
+  <div id="job-error" class="message error" {% if not job.error %}hidden{% endif %}>{{ job.error }}</div>
+
+  <div class="job-log-wrap">
+    <div class="job-log-head">
+      <span>Журнал</span>
+      <span class="muted small" id="job-hint">обновляется автоматически</span>
+    </div>
+    <pre id="job-log" class="job-log">{{ job.log }}</pre>
+  </div>
+
+  <div class="actions">
+    <a class="btn" href="{% url 'web:jobs' %}">Все задачи</a>
+    <a id="job-next" class="btn btn-primary {% if not job.is_finished %}hidden{% endif %}" href="{{ next_url }}">
+      {% if job.kind == 'parse_listing' %}К объявлениям{% elif job.kind == 'parse_detail' %}К объявлению{% else %}К результату{% endif %}
+    </a>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+  window.MVP_JOB = {
+    id: "{{ job.pk }}",
+    finished: {{ job.is_finished|yesno:"true,false" }},
+    error: {{ job.error|yesno:"true,false" }},
+    nextUrl: "{{ next_url|escapejs }}"
+  };
+</script>
+{% endblock %}

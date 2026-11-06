@@ -1,0 +1,75 @@
+{% extends "web/base.html" %}
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h2>Объявления</h2>
+      {% if source %}<p class="muted">{{ source.title|default:source.url }} · {{ items|length }} шт.</p>{% endif %}
+    </div>
+    <div class="actions">
+      {% if source %}
+        <form method="post" action="{% url 'web:parse_source' %}">
+          {% csrf_token %}
+          <button class="btn" type="submit">Обновить список</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if not source %}
+    <p class="empty">Сначала добавьте ссылку на выдачу Авито.</p>
+    <a class="btn btn-primary" href="{% url 'web:sources' %}">Добавить источник</a>
+  {% elif not items %}
+    <p class="empty">Объявлений пока нет. Нажмите «Обновить список» или проверьте источник.</p>
+  {% else %}
+    <div class="table-wrap">
+      <table class="ads-table">
+        <thead>
+          <tr><th></th><th>Объявление</th><th>Цена</th><th>Детали</th><th>Публикация</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for ad in items %}
+          <tr>
+            <td class="thumb-cell">
+              {% if ad.thumbnail_url %}
+                <img class="thumb" src="{{ ad.thumbnail_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+              {% else %}
+                <span class="thumb placeholder">нет фото</span>
+              {% endif %}
+            </td>
+            <td>
+              <a class="ad-title" href="{% url 'web:ad_detail' ad.pk %}">{{ ad.title|default:"Без заголовка" }}</a>
+              <div class="muted small">id {{ ad.avito_id }}{% if ad.location %} · {{ ad.location }}{% endif %}</div>
+            </td>
+            <td class="nowrap">{{ ad.price_text|default:"—" }}</td>
+            <td>
+              {% if ad.detail_loaded %}
+                <span class="status status-done">загружены</span>
+              {% elif ad.detail_status == 'error' %}
+                <span class="status status-error">ошибка</span>
+              {% else %}
+                <span class="status status-queued">только карточка</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if ad.publication %}
+                {% if ad.publication.status == 'posted' %}
+                  <a class="status status-posted" href="{{ ad.publication.vk_post_url }}" target="_blank" rel="noopener">опубликовано</a>
+                {% elif ad.publication.status == 'failed' %}
+                  <span class="status status-error">ошибка</span>
+                {% else %}
+                  <span class="status status-queued">{{ ad.publication.get_status_display }}</span>
+                {% endif %}
+              {% else %}
+                <span class="muted small">—</span>
+              {% endif %}
+            </td>
+            <td class="right"><a class="btn btn-small" href="{% url 'web:ad_detail' ad.pk %}">Открыть</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

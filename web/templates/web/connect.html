@@ -1,0 +1,122 @@
+{% extends "web/base.html" %}
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <h2>VK-аккаунт</h2>
+    {% if account %}
+      <span class="status {% if account.status == 'active' %}status-done{% else %}status-error{% endif %}">
+        {{ account.get_status_display }}
+      </span>
+    {% endif %}
+  </div>
+
+  {% if account %}
+    <dl class="facts">
+      <div><dt>Пользователь</dt><dd>{{ account.display_name|default:"неизвестно" }}</dd></div>
+      <div><dt>Токен</dt><dd class="mono">{{ account.token_mask|default:"—" }}</dd></div>
+      <div><dt>Проверен</dt><dd>{{ account.last_checked_at|date:"d.m.Y H:i"|default:"—" }}</dd></div>
+    </dl>
+    {% if account.error %}<div class="message error">{{ account.error }}</div>{% endif %}
+    <form method="post" class="inline">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="refresh">
+      <button class="btn" type="submit">Обновить список сообществ</button>
+    </form>
+  {% else %}
+    <p class="muted">Добавьте пользовательский токен. Токен сообщества не подойдёт для фото.</p>
+  {% endif %}
+
+  <form method="post" class="form-grid">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="token">
+    <label class="field field-wide">
+      <span>{{ form.token.label }}</span>
+      {{ form.token }}
+      {% if form.token.errors %}<em class="error-text">{{ form.token.errors|striptags }}</em>{% endif %}
+      <small>{{ form.token.help_text }}</small>
+    </label>
+    <button class="btn btn-primary" type="submit">{% if account %}Заменить токен{% else %}Проверить токен{% endif %}</button>
+  </form>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Сообщества</h2></div>
+  {% if community %}
+    <div class="active-community">
+      <div>
+        <span class="card-kicker">Выбрано сейчас</span>
+        <strong>{{ community.name }}</strong>
+        <span class="muted">vk.com/{{ community.screen_name|default:community.group_id }}</span>
+      </div>
+      <div class="chips">
+        {% if community.is_admin %}<span class="chip ok">администратор</span>{% endif %}
+        {% if community.can_post %}<span class="chip ok">постинг</span>{% endif %}
+        {% if community.can_upload_photos %}<span class="chip ok">фото</span>{% else %}<span class="chip bad">фото недоступны</span>{% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% if communities %}
+    <div class="community-list">
+      {% for item in communities %}
+        <form method="post" class="community-row">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="community">
+          <input type="hidden" name="group_id" value="{{ item.group_id }}">
+          <div class="community-main">
+            <strong>{{ item.name }}</strong>
+            <span class="muted">vk.com/{{ item.screen_name|default:item.group_id }}</span>
+          </div>
+          <button class="btn btn-small {% if community and community.group_id == item.group_id %}btn-ghost{% else %}btn-primary{% endif %}"
+                  type="submit" {% if community and community.group_id == item.group_id %}disabled{% endif %}>
+            {% if community and community.group_id == item.group_id %}Выбрано{% else %}Выбрать{% endif %}
+          </button>
+        </form>
+      {% endfor %}
+    </div>
+  {% elif account %}
+    <p class="empty">Список не загружен. Нажмите «Обновить список сообществ».</p>
+  {% else %}
+    <p class="empty">Сначала подключите аккаунт.</p>
+  {% endif %}
+</section>
+
+{% if community %}
+<section class="card">
+  <div class="card-head">
+    <h2>Ключ сообщества для публикации</h2>
+    {% if community.has_community_token %}
+      <span class="status status-done">сохранён {{ community.community_token_mask }}</span>
+    {% else %}
+      <span class="status status-queued">не задан</span>
+    {% endif %}
+  </div>
+  <p class="muted">
+    Нужен, если пользовательский токен выдан не standalone-приложению: VK отклоняет
+    <code>wall.post</code> с ошибкой 15. Ключ сообщества можно создать в
+    «Управление сообществом → Работа с API → Создать ключ» с правами на стену.
+    Фото всё равно загружаются пользовательским токеном.
+  </p>
+  <form method="post" class="form-grid">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="community_token">
+    <label class="field field-wide">
+      <span>Ключ сообщества</span>
+      <input type="password" name="community_token" autocomplete="off"
+             placeholder="{% if community.has_community_token %}вставьте новый ключ, чтобы заменить{% else %}вставьте ключ сообщества{% endif %}">
+      <small>Пустое поле удалит сохранённый ключ. Ключ хранится зашифрованным.</small>
+    </label>
+    <button class="btn btn-primary" type="submit">Сохранить ключ сообщества</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="card-head"><h2>Проверка возможностей</h2></div>
+  <p class="muted">
+    Для фото нужен пользовательский токен с правом <code>photos</code> и права администратора
+    в сообществе. Токен сообщества умеет только текст, поэтому в MVP такие сообщества
+    не допускаются к публикации с фото.
+  </p>
+</section>
+{% endblock %}

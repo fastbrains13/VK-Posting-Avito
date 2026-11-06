@@ -1,0 +1,33 @@
+{% load static %}<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход · Авито → VK</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body class="login-body">
+  <main class="login-card">
+    <div class="login-brand"><span class="brand-mark">А→V</span> Авито → VK</div>
+    <h1>Вход в админку</h1>
+    <p class="muted">MVP v0: ручной парсинг и публикация в сообщество.</p>
+    {% if form.non_field_errors %}
+      <div class="message error">{{ form.non_field_errors }}</div>
+    {% endif %}
+    <form method="post" class="stack">
+      {% csrf_token %}
+      <label class="field">
+        <span>Логин</span>
+        <input type="text" name="username" autocomplete="username" autofocus required>
+      </label>
+      <label class="field">
+        <span>Пароль</span>
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <input type="hidden" name="next" value="{{ next }}">
+      <button class="btn btn-primary" type="submit">Войти</button>
+    </form>
+    <p class="login-hint">Пользователь создаётся командой <code>createsuperuser</code>.</p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,84 @@
+{% extends "web/base.html" %}
+{% block content %}
+{% if community %}
+<section class="card">
+  <div class="card-head"><h2>Настройки сообщества</h2></div>
+  <form method="post" class="form-grid">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="save_community">
+    <label class="field">
+      <span>Минимальный интервал между постами, сек</span>
+      <input type="number" name="min_interval_sec" min="30" max="86400"
+             value="{{ community.min_interval_sec }}">
+      <small>VK не любит частые посты. По умолчанию 240 секунд.</small>
+    </label>
+    <label class="field">
+      <span>Максимум фото в посте</span>
+      <input type="number" name="max_photos" min="1" max="10" value="{{ community.max_photos }}">
+      <small>VK принимает не больше 10.</small>
+    </label>
+    <label class="switchrow field-wide">
+      <span class="tw">
+        <b>Требовать фото</b>
+        <small>Если фото не скачались, публикация будет пропущена.</small>
+      </span>
+      <input type="checkbox" name="require_photos" {% if community.require_photos %}checked{% endif %}>
+    </label>
+    <button class="btn btn-primary" type="submit">Сохранить настройки</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h2>Прокси</h2>
+      <p class="muted">Единый пул для Авито и VK. Используются по очереди.</p>
+    </div>
+    <div class="actions" style="margin:0">
+      <span class="muted">{{ proxies|length }} шт.</span>
+      <form method="post" style="display:inline">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="check_all">
+        <button class="btn btn-small" type="submit">Проверить все</button>
+      </form>
+      <form method="post" style="display:inline">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="delete_bad">
+        <button class="btn btn-small btn-neg" type="submit">Удалить нерабочие</button>
+      </form>
+    </div>
+  </div>
+
+  <form method="post" class="form-grid">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="add_proxies">
+    <label class="field field-wide">
+      <span>Список прокси — по одному в строке</span>
+      <textarea name="proxies" rows="6" placeholder="http://user:pass@1.2.3.4:8080&#10;socks5://user:pass@5.6.7.8:1080&#10;9.10.11.12:3128"></textarea>
+      <small>
+        Форматы: <code>http://user:pass@host:port</code>, <code>socks5://user:pass@host:port</code>,
+        <code>host:port</code>. Если схема не указана, тип определится автоматически: сначала HTTP,
+        затем SOCKS5. Прокси считается рабочим, только если через него доступны и Авито, и VK.
+        Нерабочие новые прокси не добавляются; новые рабочие добавляются к текущему списку.
+        Для браузера подходят HTTP и SOCKS5 без пароля; SOCKS5 с паролем используется только
+        для запросов (VK и скачивание фото).
+      </small>
+    </label>
+    <button class="btn btn-primary" type="submit">Добавить и проверить</button>
+  </form>
+
+  {% include "web/_proxy_table.html" with proxies=proxies %}
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Как это работает</h2></div>
+  <ul class="plain-list">
+    <li>Проверенные и включённые прокси выбираются по очереди: давно не использованный — следующий.</li>
+    <li>Один пул используется и для Авито, и для VK; статус у прокси общий.</li>
+    <li>Три ошибки подряд помечают прокси как нерабочий; его можно проверить и включить снова.</li>
+    <li>Пароли прокси хранятся зашифрованными и не показываются в интерфейсе.</li>
+    <li>Если пул пуст, приложение работает напрямую с вашего IP.</li>
+  </ul>
+</section>
+{% endblock %}

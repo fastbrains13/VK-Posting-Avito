@@ -1,0 +1,81 @@
+{% extends "web/base.html" %}
+{% block content %}
+<div class="grid grid-3">
+  <section class="card">
+    <span class="card-kicker">Объявления</span>
+    <div class="stat">{{ ads_count }}</div>
+    <p class="muted">Спарсено из текущего источника</p>
+    <a class="btn btn-small" href="{% url 'web:ads' %}">Открыть</a>
+  </section>
+  <section class="card">
+    <span class="card-kicker">Опубликовано</span>
+    <div class="stat">{{ posted_count }}</div>
+    <p class="muted">Постов в выбранном сообществе</p>
+    <a class="btn btn-small" href="{% url 'web:publications' %}">История</a>
+  </section>
+  <section class="card">
+    <span class="card-kicker">Режим</span>
+    <div class="stat stat-small">Ручной</div>
+    <p class="muted">Автопубликации и расписания в MVP нет</p>
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Порядок работы</h2>
+  </div>
+  <ol class="steps">
+    <li class="{% if account %}done{% endif %}">
+      <b>Подключить VK-аккаунт</b>
+      <span>Пользовательский токен, только сообщества с правами администратора.</span>
+      {% if not account %}<a href="{% url 'web:connect' %}">Подключить</a>{% endif %}
+    </li>
+    <li class="{% if community %}done{% endif %}">
+      <b>Выбрать сообщество</b>
+      <span>Одно сообщество для ручной публикации.</span>
+      {% if account and not community %}<a href="{% url 'web:connect' %}">Выбрать</a>{% endif %}
+    </li>
+    <li class="{% if source %}done{% endif %}">
+      <b>Добавить ссылку на выдачу Авито</b>
+      <span>Парсится только эта страница, без пагинации.</span>
+      {% if not source %}<a href="{% url 'web:sources' %}">Добавить</a>{% endif %}
+    </li>
+    <li class="{% if ads_count %}done{% endif %}">
+      <b>Загрузить объявления</b>
+      <span>Получить карточки, открыть объявление и подготовить пост.</span>
+      {% if source %}<a href="{% url 'web:sources' %}">К источнику</a>{% endif %}
+    </li>
+    <li class="{% if posted_count %}done{% endif %}">
+      <b>Опубликовать вручную</b>
+      <span>С фото, ссылкой и без повторов в это сообщество.</span>
+      {% if community %}<a href="{% url 'web:ads' %}">К объявлениям</a>{% endif %}
+    </li>
+  </ol>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Последние задачи</h2>
+    <a class="link" href="{% url 'web:jobs' %}">Все задачи</a>
+  </div>
+  {% if jobs %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Задача</th><th>Статус</th><th>Создана</th><th></th></tr></thead>
+        <tbody>
+        {% for job in jobs %}
+          <tr>
+            <td>{{ job.get_kind_display }} #{{ job.pk }}</td>
+            <td><span class="status status-{{ job.status }}">{{ job.get_status_display }}</span></td>
+            <td class="muted">{{ job.created_at|date:"d.m.Y H:i" }}</td>
+            <td class="right"><a class="link" href="{% url 'web:job_detail' job.pk %}">Открыть</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty">Задач пока нет. Начните с загрузки объявлений.</p>
+  {% endif %}
+</section>
+{% endblock %}

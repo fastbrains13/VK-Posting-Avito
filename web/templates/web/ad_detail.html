@@ -1,0 +1,99 @@
+{% extends "web/base.html" %}
+{% block content %}
+<div class="ad-head">
+  <a class="back" href="{% url 'web:ads' %}">← К объявлениям</a>
+  <div class="ad-title-row">
+    <h2>{{ ad.title|default:"Без заголовка" }}</h2>
+    <span class="price">{{ ad.price_text|default:"Цена не указана" }}</span>
+  </div>
+  <div class="muted">
+    id {{ ad.avito_id }}{% if ad.location %} · {{ ad.location }}{% endif %}
+    · <a class="link" href="{{ ad.url }}" target="_blank" rel="noopener">открыть на Авито</a>
+  </div>
+</div>
+
+<div class="two-col">
+  <section class="card">
+    <div class="card-head">
+      <h2>Фотографии</h2>
+      <span class="muted">{{ ad.photo_count }} скачано</span>
+    </div>
+    {% if ad.photos.all %}
+      <div class="photo-grid">
+        {% for photo in ad.photos.all %}
+          {% if photo.status == 'downloaded' %}
+            <a href="{% url 'web:photo' photo.pk %}" target="_blank" rel="noopener">
+              <img src="{% url 'web:photo' photo.pk %}" alt="" loading="lazy">
+            </a>
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty">Фото ещё не загружены.</p>
+    {% endif %}
+    <div class="actions">
+      <form method="post" action="{% url 'web:prepare_ad' ad.pk %}">
+        {% csrf_token %}
+        <button class="btn {% if not ad.detail_loaded %}btn-primary{% endif %}" type="submit">
+          {% if ad.detail_loaded %}Обновить описание и фото{% else %}Загрузить описание и фото{% endif %}
+        </button>
+      </form>
+    </div>
+    {% if ad.detail_error %}<div class="message error">{{ ad.detail_error }}</div>{% endif %}
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Предпросмотр поста</h2></div>
+    <pre class="post-preview">{{ message }}</pre>
+    <div class="preview-meta">
+      <span>{{ message|length }} символов</span>
+      <span>{{ ad.photo_count }} фото</span>
+      {% if ad.photo_count > 10 %}<span class="warn">VK примет максимум 10</span>{% endif %}
+    </div>
+  </section>
+</div>
+
+<section class="card publish-card">
+  <div class="card-head"><h2>Публикация</h2></div>
+
+  {% if not community %}
+    <div class="message warning">Сначала выберите сообщество VK.</div>
+    <a class="btn btn-primary" href="{% url 'web:connect' %}">Подключить VK</a>
+  {% elif publication and publication.status == 'posted' %}
+    <div class="message success">
+      Объявление уже опубликовано в «{{ community.name }}».
+      {% if publication.vk_post_url %}
+        <a class="link" href="{{ publication.vk_post_url }}" target="_blank" rel="noopener">Открыть пост</a>
+      {% endif %}
+    </div>
+  {% else %}
+    {% if publication and publication.status == 'failed' %}
+      <div class="message error">
+        Прошлая попытка не удалась: {{ publication.error|default:"неизвестная ошибка" }}
+      </div>
+    {% endif %}
+    {% if not ad.detail_loaded %}
+      <p class="muted">Сначала загрузите описание и фотографии: без деталей пост будет неполным.</p>
+    {% elif not community.can_upload_photos %}
+      <div class="message error">
+        У сообщества не подтверждена загрузка фото. Проверьте пользовательский токен и права администратора.
+      </div>
+    {% elif wait > 0 %}
+      <div class="message warning">Следующий пост можно опубликовать через {{ wait }} сек.</div>
+    {% elif community.require_photos and ad.photo_count == 0 %}
+      <div class="message error">У объявления нет скачанных фото, а сообщество требует фото.</div>
+    {% endif %}
+
+    <div class="actions">
+      <form method="post" action="{% url 'web:publish_ad' ad.pk %}">
+        {% csrf_token %}
+        <button class="btn btn-primary btn-large" type="submit"
+          {% if not ad.detail_loaded or not community.can_upload_photos or wait > 0 or community.require_photos and ad.photo_count == 0 %}disabled{% endif %}>
+          {% if publication and publication.status == 'failed' %}Повторить публикацию{% else %}Опубликовать в «{{ community.name }}»{% endif %}
+        </button>
+      </form>
+    </div>
+    <p class="hint">Публикация появится в сообществе сразу. Повторно это объявление в это сообщество опубликовать нельзя.</p>
+  {% endif %}
+</section>
+{% endblock %}
