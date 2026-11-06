@@ -1,1178 +1,1825 @@
-"""HTML-страницы веб-админки (вынесены из webui.py для удобства правок).
+"""HTML-страницы веб-админки: общий каркас + самостоятельные страницы разделов.
 
-PAGE — основная админка: сайдбар + топбар + 7 разделов с hash-роутингом.
-LOGIN_PAGE — экран входа.
+Структура (порядок правок именно такой):
 
-Стиль: true-black-flat (тёмная тема на чистом чёрном, elevation светлотой,
-цвет только на данных — VK-синий), shell «Ruled T-frame»: сайдбар 210px +
-топбар 64px на одном фоне, разделены 1px-линиями.
+  LAYOUT_SHELL  — каркас: тонированная L-рамка (сайдбар 228px + топбар 48px) и
+                  белый лист (sheet) с содержимым раздела; сюда же входят CSS-токены
+                  обеих тем и общий JS (api, статус, запуск задач, автообновление);
+  <РАЗДЕЛ>_PAGE — разметка одного раздела (вставляется в слот @@CONTENT@@);
+  LOGIN_PAGE    — экран входа, самодостаточный;
+  PAGES         — карта url -> (имя раздела, заголовок, разметка, скрипт);
+  render_page() — собрать готовую страницу по url-пути.
+
+Разделы живут на отдельных URL (/, /ads, /sources, /vk, /jobs, /logs, /settings),
+hash-роутинга больше нет: каждая страница независима, состояние фильтров —
+в query-параметрах, поэтому переход и перезагрузка не ломают отрисовку.
+
+Стиль: Framed sheet (light) + тёмная тема теми же ролями токенов; цвет только
+на данных и одном действии, уровни — тонирование рамки → лист → карточка.
 """
 
-PAGE = r"""<!DOCTYPE html>
-<html lang="ru">
+# --------------------------------------------------------------------- #
+# каркас
+# --------------------------------------------------------------------- #
+LAYOUT_SHELL = r"""<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Админка — Авито → VK</title>
+<title>@@TITLE@@</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+/* тему читаем до отрисовки, чтобы не мигало при переходе между страницами */
+try {
+  var t = localStorage.getItem('avito-theme');
+  if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  document.documentElement.dataset.theme = t;
+} catch (e) { document.documentElement.dataset.theme = 'dark'; }
+</script>
 <style>
 :root{
-  --ground:#000000; --surface:#111111; --raised:#2a2a2a;
-  --border:#1a1a1a; --rule:#161616; --control:#444444;
-  --text:#ffffff; --muted:#b4b4b4; --faint:#949494;
-  --accent:#4cb3f0; --positive:#3fc07a; --negative:#e5566f; --warning:#e5a93b;
-  --pill-accent-bg:#10202d; --pill-accent-ink:#4cb3f0;
+  /* Framed sheet: рамка тонирована в синий цвет продукта, лист белый */
+  --frame:#eef2f6; --surface:#ffffff; --raised:#f4f6f8; --active:#e7ebef;
+  --border:#e2e7eb; --rule:#f0f1f2; --control:#cdced1;
+  --ink:#131416; --muted:#5d5f60; --faint:#6b6b6b;
+  --accent:#2f6f96; --primary:#1d1f20; --primary-ink:#ffffff;
+  --positive:#1e7b4f; --negative:#c4242a; --warning:#92400e;
+  --pill-positive-bg:#dcfae5; --pill-positive-ink:#04250e;
+  --pill-negative-bg:#ffedea; --pill-negative-ink:#831c1e;
+  --pill-warning-bg:#fffbeb; --pill-warning-ink:#92400e; --pill-warning-border:#fde68a;
+  --pill-accent-bg:#e3eef4; --pill-accent-ink:#1c4f6d;
+  --pill-neutral-bg:#ebedee; --pill-neutral-ink:#353736;
+  --shadow-card:0 1px 2px rgba(19,20,22,.05);
+  --shadow-float:0 2px 6px rgba(19,20,22,.10),0 16px 32px -18px rgba(19,20,22,.28);
+  --radius-sheet:16px; --radius-card:8px; --radius-control:6px; --radius-chip:4px;
+  --gap:24px; --pad:24px; --side:228px; --topbar:48px; --inset:8px;
+  --row:48px; --control-height:32px;
+  --fs-title:22px; --fs-section:16px; --fs-kpi:28px; --fs-body:14px; --fs-small:12px;
+}
+html[data-theme=dark]{
+  /* те же роли, нейтральные тёмные поверхности (без navy/slate) */
+  --frame:#131415; --surface:#1b1c1e; --raised:#232527; --active:#2c2e30;
+  --border:#2a2c2e; --rule:#232526; --control:#4a4c4e;
+  --ink:#f2f3f4; --muted:#b4b4b4; --faint:#949494;
+  --accent:#79a8cf; --primary:#ffffff; --primary-ink:#131416;
+  --positive:#3fc07a; --negative:#e5566f; --warning:#e5a93b;
   --pill-positive-bg:#172a1d; --pill-positive-ink:#3fc07a;
   --pill-negative-bg:#2c1a20; --pill-negative-ink:#e5566f;
-  --pill-warning-bg:#2b2414; --pill-warning-ink:#e5a93b;
-  --pill-neutral-bg:#222222; --pill-neutral-ink:#b4b4b4;
-  --radius-card:20px; --gap:16px; --pad:22px;
-  --side:210px; --topbar:64px; --gutter:29px;
+  --pill-warning-bg:#2b2414; --pill-warning-ink:#e5a93b; --pill-warning-border:#3d3319;
+  --pill-accent-bg:#1a2833; --pill-accent-ink:#79a8cf;
+  --pill-neutral-bg:#2a2c2e; --pill-neutral-ink:#b4b4b4;
+  --shadow-card:0 1px 2px rgba(0,0,0,.30);
+  --shadow-float:0 2px 8px rgba(0,0,0,.45),0 18px 40px -20px rgba(0,0,0,.70);
 }
 *{box-sizing:border-box}
-html{color-scheme:dark}
-body{margin:0; background:var(--ground); color:var(--text);
-  font:14px/1.5 Inter,system-ui,'Segoe UI',Roboto,sans-serif;
-  display:grid; grid-template-columns:var(--side) 1fr; grid-template-rows:var(--topbar) 1fr;
-  min-height:100vh;}
-.num{font-variant-numeric:tabular-nums}
-a{color:inherit}
-::selection{background:#2c3e50}
+html{color-scheme:light}
+html[data-theme=dark]{color-scheme:dark}
+body{margin:0; background:var(--frame); color:var(--ink);
+  font:400 var(--fs-body)/1.45 "IBM Plex Sans",Inter,system-ui,"Segoe UI",Roboto,sans-serif;
+  display:flex; min-height:100vh;}
+h1,h2,h3,p{margin:0}
+.num,.mono{font-variant-numeric:tabular-nums}
+.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+a{color:inherit; text-decoration:none}
+::selection{background:var(--pill-accent-bg)}
+.skip{position:absolute; left:-9999px}
+.skip:focus{left:8px; top:8px; z-index:60; background:var(--surface); padding:8px 12px;
+  border-radius:var(--radius-control); border:1px solid var(--control)}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 
-/* ---------- сайдбар ---------- */
-.side{grid-row:1/3; background:var(--ground); border-right:1px solid var(--rule);
-  display:flex; flex-direction:column; padding:0 12px; z-index:30;}
-.brand{padding:18px 10px 16px; border-bottom:1px solid var(--rule);}
-.brand .name{font-size:15px; font-weight:600; letter-spacing:-.01em;}
-.brand .scope{font-size:12px; color:var(--faint); margin-top:3px;
-  max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.nav{flex:1; padding:8px 0 14px; overflow:auto;}
-.ngroup{font-size:12px; color:var(--faint); padding:16px 10px 6px;}
-.nitem{display:flex; align-items:center; gap:8px; height:34px; padding:0 10px;
-  border-radius:8px; color:var(--muted); font-size:14px; text-decoration:none; cursor:pointer;}
-.nitem:hover{color:var(--text);}
-.nitem.on{color:#fff;}
-.nitem .cnt{margin-left:auto; font-size:12px; color:var(--faint); font-variant-numeric:tabular-nums;}
-.nitem .cnt.act{color:var(--accent);}
-.userrow{border-top:1px solid var(--rule); padding:14px 10px; display:flex;
-  align-items:center; justify-content:space-between; font-size:13px; color:var(--muted);}
-.userrow a{color:var(--muted); text-decoration:none;}
-.userrow a:hover{color:var(--text);}
+/* ---------- рамка: сайдбар ---------- */
+.side{position:sticky; top:0; flex:none; width:var(--side); height:100vh; overflow:auto;
+  display:flex; flex-direction:column; padding:14px 12px 12px; z-index:30}
+.brand{display:flex; align-items:center; gap:9px; padding:2px 8px 14px}
+.brand svg{flex:none}
+.brand .name{font-size:15px; font-weight:600; letter-spacing:-.01em}
+.brand .scope{font-size:var(--fs-small); color:var(--muted); margin-top:2px;
+  max-width:158px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.nav{flex:1; min-height:0; overflow:auto; padding-bottom:10px}
+.ngroup{font-size:var(--fs-small); color:var(--muted); padding:14px 8px 6px}
+.nitem{display:flex; align-items:center; gap:8px; height:34px; padding:0 10px; margin:1px 0;
+  border-radius:var(--radius-control); color:var(--muted); font-size:var(--fs-body)}
+.nitem:hover{background:var(--raised); color:var(--ink)}
+.nitem[aria-current=page]{background:var(--active); color:var(--ink); font-weight:500}
+.nitem .cnt{margin-left:auto; font-size:var(--fs-small); color:var(--muted)}
+.nitem[aria-current=page] .cnt{color:var(--accent); font-weight:500}
+.userrow{display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:12px 8px 2px; font-size:13px; color:var(--muted)}
+.userrow a:hover{color:var(--ink)}
 
-/* ---------- топбар ---------- */
-.topbar{grid-column:2; display:flex; align-items:center; padding:0 var(--gutter);
-  border-bottom:1px solid var(--rule); gap:12px; min-width:0;}
-.stamp{font-size:12px; color:var(--faint); white-space:nowrap;}
-.topspacer{flex:1;}
-#burger{display:none;}
-.vkswitch{display:flex; align-items:center; gap:9px; height:100%; padding:0 0 0 var(--gutter);
-  border-left:1px solid var(--rule); font-size:13px; color:var(--muted);
-  text-decoration:none; max-width:320px;}
-.vkswitch:hover{color:var(--text);}
-.vkswitch .nm{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.dot{width:7px; height:7px; border-radius:50%; background:var(--faint); flex:none;}
-.dot.ok{background:var(--positive);} .dot.err{background:var(--negative);}
-.dot.acc{background:var(--accent);} .dot.warn{background:var(--warning);}
+/* ---------- рамка: топбар ---------- */
+.wrap{flex:1; min-width:0; display:flex; flex-direction:column}
+.topbar{position:sticky; top:0; z-index:20; height:var(--topbar); flex:none;
+  display:flex; align-items:center; gap:10px; padding:0 16px}
+.crumb{font-size:13px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.stamp{font-size:var(--fs-small); color:var(--muted); white-space:nowrap}
+.topspace{flex:1}
+.vkswitch{display:flex; align-items:center; gap:8px; padding:0 10px; height:28px;
+  border-radius:var(--radius-control); color:var(--muted); font-size:13px; max-width:280px}
+.vkswitch:hover{background:var(--raised); color:var(--ink)}
+.vkswitch .nm{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.dot{width:7px; height:7px; border-radius:50%; background:var(--faint); flex:none}
+.dot.ok{background:var(--positive)} .dot.err{background:var(--negative)}
+.dot.acc{background:var(--accent)} .dot.warn{background:var(--warning)}
+.iconbtn{display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px;
+  border:1px solid var(--control); border-radius:var(--radius-control);
+  background:var(--surface); color:var(--muted); cursor:pointer; flex:none}
+.iconbtn:hover{color:var(--ink); background:var(--raised)}
+#burger{display:none}
 
-/* ---------- контент ---------- */
-main{grid-column:2; padding:26px var(--gutter) 64px; max-width:1400px; width:100%; min-width:0;}
-.view{display:none;} .view.on{display:block;}
-.titlerow{display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:20px;}
-h1{font-size:24px; font-weight:600; margin:0; letter-spacing:-.01em;}
-.sub{font-size:14px; color:var(--muted); margin:6px 0 0; max-width:640px;}
-.actions{display:flex; gap:8px; align-items:center; flex:none; flex-wrap:wrap;}
+/* ---------- лист ---------- */
+.sheet{background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-sheet) var(--radius-sheet) 0 0;
+  margin:0 var(--inset) var(--inset) 0; padding:var(--pad); min-width:0}
+.page{max-width:1156px; margin:0 auto; min-width:0}
+.titlerow{display:flex; align-items:flex-end; justify-content:space-between; gap:var(--gap);
+  flex-wrap:wrap; margin-bottom:var(--gap)}
+h1{font-size:var(--fs-title); font-weight:600; letter-spacing:-.01em}
+.sub{font-size:var(--fs-body); color:var(--muted); margin-top:6px; max-width:660px}
+.actions{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.sectiontitle{font-size:var(--fs-section); font-weight:600; margin:0 0 8px;
+  display:flex; align-items:baseline; gap:8px}
+.sectiontitle .count{font-size:var(--fs-small); font-weight:400; color:var(--muted)}
+.block{margin-bottom:var(--gap)}
 
-/* кнопки */
-.btn{height:36px; padding:0 18px; border-radius:999px; border:0;
-  font:500 14px Inter,system-ui,sans-serif; cursor:pointer;
-  display:inline-flex; align-items:center; gap:8px; text-decoration:none;
-  color:var(--text); background:var(--surface); white-space:nowrap;}
-.btn:hover{background:var(--raised);}
-.btn.primary{background:#fff; color:#000;} .btn.primary:hover{background:#e6e6e6;}
-.btn.out{background:transparent; border:1px solid var(--control);}
-.btn.out:hover{background:var(--surface);}
-.btn.sm{height:28px; padding:0 12px; font-size:13px;}
-.btn.txt{background:transparent; height:auto; padding:2px 6px; font-size:13px; color:var(--muted);}
-.btn.txt:hover{color:var(--text); background:transparent;}
-.btn.txt.neg{color:var(--negative);} .btn.txt.acc{color:var(--accent);}
-button:disabled{opacity:.45; cursor:progress;}
+/* ---------- карточки ---------- */
+.card{background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-card); padding:16px; box-shadow:var(--shadow-card); min-width:0}
+.card.flush{padding:0; overflow:hidden}
+.cardhead{display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:14px 16px; border-bottom:1px solid var(--rule)}
+.cardhead h2,.cardhead h3{font-size:var(--fs-section); font-weight:600}
+.kpis{display:grid; grid-template-columns:repeat(4,1fr); gap:var(--gap); margin-bottom:var(--gap)}
+.kpi{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-card);
+  padding:14px 16px; box-shadow:var(--shadow-card); min-width:0; display:flex;
+  flex-direction:column; gap:4px}
+.kpi > span{font-size:13px; color:var(--muted)}
+.kpi > b{font-size:var(--fs-kpi); font-weight:400; line-height:1.1;
+  font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.kpi > b small{font-size:14px; color:var(--muted); font-weight:400}
+.kpi > em{font-size:var(--fs-small); color:var(--muted); font-style:normal;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.kpi a{color:var(--ink)} .kpi a:hover{color:var(--accent)}
 
-/* панели и заголовки блоков */
-.panel{background:var(--surface); border-radius:var(--radius-card); padding:var(--pad); min-width:0;}
-.chead{font-size:16px; font-weight:600; margin:0 0 10px;}
+/* ---------- дашборд: колонка + рельс ---------- */
+.dashgrid{display:grid; grid-template-columns:1fr 384px; gap:var(--gap); align-items:start}
+.maincol{min-width:0}
+.rail{display:flex; flex-direction:column; min-width:0}
+.rail .card{margin-bottom:16px}
 
-/* KPI-полоса: один контейнер, делённый линиями */
-.kstrip{display:grid; grid-template-columns:repeat(5,1fr); background:var(--surface);
-  border-radius:var(--radius-card); overflow:hidden; margin-bottom:16px;}
-.kstrip .k{padding:16px 20px; border-left:1px solid var(--rule); min-width:0;}
-.kstrip .k:first-child{border-left:0;}
-.kstrip .k span{display:block; font-size:12px; color:var(--faint); margin-bottom:6px;}
-.kstrip .k b{font-size:24px; font-weight:500; font-variant-numeric:tabular-nums;}
-.kstrip .k b small{font-size:14px; color:var(--faint); font-weight:400;}
+/* конвейер — главный блок обзора */
+.stages{display:flex; align-items:stretch; gap:0}
+.stage{flex:1; min-width:0; padding:4px 16px; display:flex; flex-direction:column; gap:4px}
+.stage:first-child{padding-left:4px}
+.stage:last-child{padding-right:4px}
+.slabel{font-size:var(--fs-small); color:var(--muted); display:flex; align-items:center; gap:7px}
+.sval{font-size:24px; font-weight:400; font-variant-numeric:tabular-nums;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.sval a:hover{color:var(--accent)}
+.ssub{font-size:var(--fs-small); color:var(--muted); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+.arr{flex:none; align-self:center; color:var(--faint); padding:0 6px; font-size:14px}
+.risks{display:flex; flex-wrap:wrap; gap:8px; padding:12px 16px; border-top:1px solid var(--rule)}
+.risk{display:flex; align-items:baseline; gap:8px; font-size:13px; color:var(--muted);
+  background:var(--pill-negative-bg); border-radius:var(--radius-chip,4px); padding:6px 10px}
+.risk a{color:var(--pill-negative-ink); font-weight:500}
+.risk.warn{background:var(--pill-warning-bg); border:1px solid var(--pill-warning-border)}
+.risk.warn a,.risk.warn b{color:var(--pill-warning-ink)}
+.risk b{color:var(--pill-negative-ink); font-weight:500}
 
-/* дашборд: главная колонка + рельс 384px */
-.dashgrid{display:grid; grid-template-columns:1fr 384px; gap:16px; align-items:start;}
-.maincol{min-width:0; display:flex; flex-direction:column; gap:16px;}
-.rail{display:flex; flex-direction:column; gap:8px; min-width:0;}
-
-/* конвейер */
-.stages{display:flex; align-items:center; gap:14px;}
-.stage{flex:1; min-width:0; display:flex; flex-direction:column; gap:5px;}
-.slabel{font-size:12px; color:var(--faint); display:flex; align-items:center; gap:7px;}
-.sval{font-size:22px; font-weight:500; font-variant-numeric:tabular-nums;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.sval a{color:var(--accent); text-decoration:none;}
-.sval a:hover{text-decoration:underline;}
-.ssub{font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.arr{color:var(--faint); font-size:15px; flex:none;}
-
-/* списки-строки в карточках (посты, расписание) */
-.lrow{display:flex; align-items:baseline; gap:10px; padding:11px 2px;
-  border-top:1px solid var(--rule); font-size:13px; min-width:0;}
-.lrow:first-child{border-top:0;}
-.lrow .lt{color:var(--faint); font-size:12px; font-variant-numeric:tabular-nums; flex:none;}
-.lrow .lmain{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.lrow a{color:var(--text); text-decoration:none;}
-.lrow a:hover{color:var(--accent);}
-.lrow .rlink{color:var(--accent); text-decoration:none; flex:none; font-size:12.5px;}
-.lrow .rlink:hover{text-decoration:underline;}
-.kv{display:flex; justify-content:space-between; gap:12px; padding:7px 2px; font-size:13px;}
-.kv span{color:var(--muted);}
-.kv b{font-weight:500; font-variant-numeric:tabular-nums; text-align:right;}
-.viewall{display:inline-block; margin:10px 2px 0; font-size:13px; color:var(--muted);
-  text-decoration:none; height:30px; line-height:30px; border:1px solid var(--control);
-  border-radius:999px; padding:0 14px; align-self:flex-start;}
-.viewall:hover{color:var(--text);}
-
-/* карточки объявлений на дашборде */
-.adcards{display:grid; grid-template-columns:repeat(4,1fr); gap:16px;}
-.adcard{background:var(--surface); border-radius:var(--radius-card); overflow:hidden; min-width:0;}
-.adcard .ph{height:92px; background:var(--raised); display:flex;}
-.adcard .ph img{width:33.33%; height:100%; object-fit:cover;}
+/* карточки объявлений (продукт показывает свои снимки) */
+.adcards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px}
+.adcard{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-card);
+  overflow:hidden; min-width:0; display:flex; flex-direction:column; box-shadow:var(--shadow-card)}
+.adcard .ph{height:104px; background:var(--raised); display:flex}
+.adcard .ph img{width:33.333%; height:100%; object-fit:cover}
 .adcard .ph .noimg{flex:1; display:flex; align-items:center; justify-content:center;
-  color:var(--faint); font-size:12px;}
-.adcard .bd{padding:12px 14px 14px; display:flex; flex-direction:column; gap:5px;}
-.adcard a.t{color:var(--text); text-decoration:none; font-size:14px; font-weight:500;
-  overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;}
-.adcard a.t:hover{color:var(--accent);}
-.adcard .pr{font-size:15px; font-weight:600; font-variant-numeric:tabular-nums;}
-.adcard .mt{font-size:12px; color:var(--faint);}
+  color:var(--muted); font-size:var(--fs-small)}
+.adcard .bd{padding:12px 14px 14px; display:flex; flex-direction:column; gap:4px; flex:1}
+.adcard .t{font-size:var(--fs-body); font-weight:500; overflow:hidden;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical}
+.adcard .t:hover{color:var(--accent)}
+.adcard .pr{font-size:15px; font-weight:500; font-variant-numeric:tabular-nums; margin-top:auto}
+.adcard .mt{font-size:var(--fs-small); color:var(--muted)}
 
-/* счётчики-фильтры на «Объявлениях» */
-.counts{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:14px;}
-.counts button{background:var(--surface); border:1px solid var(--rule); border-radius:16px;
-  padding:11px 16px; text-align:left; cursor:pointer; color:var(--text); font:inherit;}
-.counts button:hover{border-color:var(--control);}
-.counts button.sel{border:1.5px solid var(--accent); background:var(--pill-accent-bg);}
-.counts span{font-size:13px; color:var(--faint);}
-.counts b{display:block; font-size:16px; font-weight:600; margin-top:2px; font-variant-numeric:tabular-nums;}
+/* ---------- список-строки ---------- */
+.lrow{display:flex; align-items:baseline; gap:10px; padding:10px 16px;
+  border-top:1px solid var(--rule); font-size:13px; min-width:0}
+.lrow:first-child{border-top:0}
+.lrow .lt{color:var(--muted); font-size:var(--fs-small); font-variant-numeric:tabular-nums; flex:none}
+.lrow .lmain{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.lrow .lmain:hover{color:var(--accent)}
+.lrow .rlink{color:var(--accent); flex:none; font-size:var(--fs-small)}
+.kv{display:flex; justify-content:space-between; align-items:baseline; gap:12px;
+  padding:8px 16px; border-top:1px solid var(--rule); font-size:13px}
+.kv:first-child{border-top:0}
+.kv span{color:var(--muted)}
+.kv b{font-weight:500; font-variant-numeric:tabular-nums; text-align:right; word-break:break-word}
+.kv b a:hover{color:var(--accent)}
 
-/* таблицы */
-.tablewrap{padding:6px 14px 10px;}
-table{width:100%; border-collapse:collapse; font-size:14px;}
-th{font-size:12px; color:var(--faint); font-weight:400; text-align:left; padding:12px 10px 8px;}
-td{padding:11px 10px; border-top:1px solid var(--rule); vertical-align:middle; min-width:0;}
-th.num,td.num{text-align:right; font-variant-numeric:tabular-nums;}
-th.r,td.r{text-align:right;}
-td .cellmain{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-td a{color:var(--text); text-decoration:none;}
-td a:hover{color:var(--accent);}
-td a.pillink{color:var(--accent);}
-.adcell{display:flex; align-items:center; gap:12px; min-width:0;}
-.thumb{width:48px; height:48px; border-radius:8px; object-fit:cover; background:var(--raised); flex:none;}
+/* ---------- кнопки ---------- */
+.btn{display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  height:var(--control-height); padding:0 14px; border-radius:var(--radius-control);
+  border:1px solid var(--control); background:var(--surface); color:var(--ink);
+  font:500 var(--fs-body) "IBM Plex Sans",system-ui,sans-serif; cursor:pointer; white-space:nowrap}
+.btn:hover{background:var(--raised)}
+.btn.primary{background:var(--primary); color:var(--primary-ink); border-color:var(--primary)}
+.btn.primary:hover{opacity:.88; background:var(--primary)}
+.btn.neg{color:var(--negative); border-color:var(--control)}
+.btn.neg:hover{background:var(--pill-negative-bg); color:var(--pill-negative-ink)}
+.btn.sm{height:28px; padding:0 10px; font-size:13px}
+.btn.txt{background:transparent; border-color:transparent; height:28px; padding:0 8px;
+  color:var(--muted); font-weight:400}
+.btn.txt:hover{background:var(--raised); color:var(--ink)}
+.btn.txt.acc{color:var(--accent)}
+.btn.txt.neg{color:var(--negative); background:transparent}
+.btn.txt.neg:hover{background:var(--pill-negative-bg); color:var(--pill-negative-ink)}
+.btn[disabled]{opacity:.5; cursor:progress}
+
+/* ---------- табы-состояния и тулбар ---------- */
+.tabs{display:flex; align-items:center; gap:20px; border-bottom:1px solid var(--border);
+  margin-bottom:16px; overflow-x:auto}
+.tabs button{background:transparent; border:0; border-bottom:2px solid transparent;
+  color:var(--muted); font:400 var(--fs-body) "IBM Plex Sans",system-ui,sans-serif;
+  padding:0 0 9px; height:38px; cursor:pointer; white-space:nowrap; display:flex;
+  align-items:baseline; gap:7px}
+.tabs button:hover{color:var(--ink)}
+.tabs button.sel{color:var(--ink); font-weight:500; border-bottom-color:var(--accent)}
+.tabs button b{font-weight:400; color:var(--muted); font-variant-numeric:tabular-nums}
+.tabs button.sel b{color:var(--accent)}
+.toolbar{display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap}
+.toolbar .note{font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums}
+input[type=text],input[type=search],input[type=password],input[type=number],select,textarea{
+  background:var(--surface); color:var(--ink); border:1px solid var(--border);
+  border-radius:var(--radius-card); height:40px; padding:0 12px;
+  font:400 var(--fs-body) "IBM Plex Sans",system-ui,sans-serif; max-width:100%}
+input[type=search]{height:var(--control-height); border-radius:var(--radius-control);
+  flex:1 1 260px; min-width:170px}
+input[type=number]{width:112px}
+select{height:var(--control-height); border-radius:var(--radius-control); padding:0 8px}
+textarea{height:auto; padding:10px 12px; font-family:"IBM Plex Mono",ui-monospace,monospace}
+input::placeholder{color:var(--faint)}
+.pager{display:flex; align-items:center; gap:8px; margin-left:auto;
+  font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums}
+
+/* ---------- таблицы ---------- */
+.tablewrap{min-width:0}
+table{width:100%; border-collapse:collapse; font-size:var(--fs-body)}
+th{font-size:13px; color:var(--muted); font-weight:400; text-align:left;
+  padding:0 10px 8px; white-space:nowrap}
+td{padding:12px 10px; border-top:1px solid var(--rule); vertical-align:middle; min-width:0}
+tbody tr{height:var(--row)}
+tbody tr:hover{background:var(--raised)}
+th.num,td.num{text-align:right; font-variant-numeric:tabular-nums}
+th.r,td.r{text-align:right}
+td .cellmain{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+td .t1{font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+td .t1:hover{color:var(--accent)}
+td .t2{font-size:13px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+td .idcell{font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:13px; color:var(--muted)}
+.adcell{display:flex; align-items:center; gap:12px; min-width:0}
+.thumb{width:48px; height:48px; border-radius:8px; object-fit:cover; background:var(--raised); flex:none}
 .thumbph{width:48px; height:48px; border-radius:8px; background:var(--raised); flex:none;
-  display:flex; align-items:center; justify-content:center; color:var(--faint); font-size:10px;}
-.adcell .tw{min-width:0;}
-.adcell .t1{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500;}
-.adcell .t2{font-size:12px; color:var(--faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.srcell{font-size:12px; color:var(--faint); max-width:130px; overflow:hidden;
-  text-overflow:ellipsis; white-space:nowrap;}
-.dtc{font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap;}
+  display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:11px}
+.adcell .tw{min-width:0}
+.srcell{max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted)}
+.dtc{color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap}
+.acts{display:flex; gap:2px; justify-content:flex-end; white-space:nowrap}
 
-/* пилюли статусов */
-.pill{display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px;
-  white-space:nowrap; flex:none;}
-.pill.ok{background:var(--pill-positive-bg); color:var(--pill-positive-ink);}
-.pill.bad{background:var(--pill-negative-bg); color:var(--pill-negative-ink);}
-.pill.warn{background:var(--pill-warning-bg); color:var(--pill-warning-ink);}
-.pill.acc{background:var(--pill-accent-bg); color:var(--pill-accent-ink);}
-.pill.off{background:var(--pill-neutral-bg); color:var(--pill-neutral-ink);}
+/* ---------- пилюли статуса ---------- */
+.pill{display:inline-flex; align-items:center; gap:6px; height:20px; padding:0 8px;
+  border-radius:4px; font-size:12px; font-weight:500; white-space:nowrap; flex:none}
+.pill.ok{background:var(--pill-positive-bg); color:var(--pill-positive-ink)}
+.pill.bad{background:var(--pill-negative-bg); color:var(--pill-negative-ink)}
+.pill.warn{background:var(--pill-warning-bg); color:var(--pill-warning-ink);
+  border:1px solid var(--pill-warning-border)}
+.pill.acc{background:var(--pill-accent-bg); color:var(--pill-accent-ink)}
+.pill.off{background:var(--pill-neutral-bg); color:var(--pill-neutral-ink)}
 
-/* панели инструментов и пагинация */
-.toolbar{display:flex; align-items:center; gap:10px; margin-bottom:12px; flex-wrap:wrap;}
-input[type=text],input[type=search],input[type=password],input[type=number],select{
-  background:var(--surface); color:var(--text); border:1px solid var(--control);
-  border-radius:999px; height:36px; padding:0 15px; font:14px Inter,system-ui,sans-serif;}
-input[type=search]{flex:1 1 260px; min-width:180px;}
-input[type=number]{width:96px;}
-input:focus-visible,select:focus-visible,.btn:focus-visible,a:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
-.pager{display:flex; align-items:center; gap:10px; font-size:13px; color:var(--muted);
-  margin-left:auto; font-variant-numeric:tabular-nums;}
+/* ---------- формы ---------- */
+.field{display:flex; flex-direction:column; gap:8px; min-width:0}
+.field > span{font-size:var(--fs-body); font-weight:500}
+.field > small{font-size:var(--fs-small); color:var(--muted)}
+.frow{display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start}
+.switch{display:inline-flex; align-items:center; gap:10px; cursor:pointer; font-size:var(--fs-body)}
+.switch input{position:absolute; opacity:0; width:1px; height:1px}
+.track{width:33px; height:18px; border-radius:999px; background:var(--control);
+  position:relative; flex:none; transition:background .15s}
+.track::after{content:""; position:absolute; top:2px; left:2px; width:14px; height:14px;
+  border-radius:50%; background:var(--surface); transition:transform .15s}
+.switch input:checked + .track{background:var(--positive)}
+.switch input:checked + .track::after{transform:translateX(15px)}
+.switch input:focus-visible + .track{outline:2px solid var(--accent); outline-offset:2px}
+.srow{display:grid; grid-template-columns:minmax(280px,450px) minmax(0,1fr); gap:var(--pad);
+  padding:32px 0; align-items:start}
+.srow:first-of-type{padding-top:8px}
+.srule{border-top:1px solid var(--border)}
+.slabel h3{font-size:var(--fs-section); font-weight:500; margin-bottom:6px}
+.slabel p{font-size:var(--fs-body); color:var(--muted); max-width:420px}
+.slabel .ro{font-size:13px; color:var(--muted); margin-top:10px; line-height:1.6; word-break:break-all}
+.spanel{display:flex; flex-direction:column; gap:16px; background:var(--raised);
+  border-radius:var(--radius-card); padding:16px}
+.sfoot{display:flex; justify-content:flex-end; align-items:center; gap:12px}
+.sfoot .saved{font-size:var(--fs-small); color:var(--muted)}
+.switchrow{display:flex; align-items:flex-start; justify-content:space-between; gap:16px}
+.switchrow .tw{display:flex; flex-direction:column; gap:3px}
+.switchrow .tw b{font-size:var(--fs-body); font-weight:500}
+.switchrow .tw small{font-size:var(--fs-small); color:var(--muted)}
 
-/* пустые состояния и ошибки */
-.empty{border:1px dashed var(--control); border-radius:12px; padding:16px 18px;
-  color:var(--faint); font-size:14px; grid-column:1/-1;}
-.errline{border:1px solid var(--pill-negative-bg); border-radius:12px; padding:12px 16px;
-  color:var(--pill-negative-ink); font-size:13px; grid-column:1/-1;
-  display:flex; align-items:center; gap:12px;}
-.skel{background:var(--raised); border-radius:6px; display:inline-block; height:14px;}
+/* ---------- вложения и предпросмотр поста ---------- */
+.vkgrid{display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); align-items:start}
+.msg{white-space:pre-wrap; font-size:var(--fs-body); line-height:1.55}
+.pvrow{display:flex; gap:16px; margin-top:12px; min-width:0}
+.pvrow .ph{width:120px; height:120px; border-radius:8px; object-fit:cover; background:var(--raised); flex:none}
+.pvrow .phph{width:120px; height:120px; border-radius:8px; background:var(--raised); flex:none;
+  display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:var(--fs-small)}
+.pvrow .msg{flex:1; min-width:0; max-height:240px; overflow:auto}
 
-/* формы и тумблеры */
-.field{display:flex; flex-direction:column; gap:8px;}
-.field > span{font-size:14px; font-weight:500;}
-.field > small{font-size:12px; color:var(--faint); margin-top:-2px;}
-.frow{display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;}
-.switch{display:flex; align-items:center; gap:10px; cursor:pointer; font-size:14px;}
-.switch input{position:absolute; opacity:0; width:0; height:0;}
-.track{width:34px; height:20px; border-radius:999px; background:var(--raised);
-  position:relative; flex:none; transition:background .15s;}
-.track::after{content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
-  border-radius:50%; background:var(--muted); transition:transform .15s, background .15s;}
-.switch input:checked + .track{background:var(--pill-positive-bg);}
-.switch input:checked + .track::after{transform:translateX(14px); background:var(--positive);}
-.switch input:focus-visible + .track{outline:2px solid var(--accent); outline-offset:2px;}
-
-/* VK-страница */
-.vkgrid{display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; margin-bottom:16px;}
-.msg{white-space:pre-wrap; font-size:14px; line-height:1.55; color:var(--text);}
-.pvrow{display:flex; gap:16px; margin-top:10px;}
-.pvrow .ph{width:120px; height:120px; border-radius:12px; object-fit:cover; background:var(--raised); flex:none;}
-.pvrow .phph{width:120px; height:120px; border-radius:12px; background:var(--raised); flex:none;
-  display:flex; align-items:center; justify-content:center; color:var(--faint); font-size:12px;}
-
-/* настройки: двухколонные секции */
-.srow{display:grid; grid-template-columns:450px 1fr; gap:24px; padding:28px 0;}
-.srow:first-of-type{padding-top:6px;}
-.srule{border-top:1px solid var(--rule);}
-.slabel h3{font-size:16px; font-weight:600; margin:0 0 6px;}
-.slabel p{font-size:14px; color:var(--muted); margin:0; max-width:420px;}
-.slabel .ro{font-size:12.5px; color:var(--faint); margin-top:10px; line-height:1.7; word-break:break-all;}
-.spanel{display:flex; flex-direction:column; gap:16px;}
-.sfoot{display:flex; justify-content:flex-end; align-items:center; gap:12px;}
-.switchrow{display:flex; align-items:center; justify-content:space-between; gap:16px;}
-.switchrow .tw{display:flex; flex-direction:column; gap:3px;}
-.switchrow .tw b{font-size:14px; font-weight:500;}
-.switchrow .tw small{font-size:12px; color:var(--faint);}
-
-/* лог */
-.logbox{background:var(--surface); border-radius:var(--radius-card); padding:16px 20px;
-  font:12px/1.65 ui-monospace,Menlo,'SF Mono',monospace; color:var(--muted);
+/* ---------- лог ---------- */
+.logbox{background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-card); padding:14px 16px;
+  font:400 12px/1.6 "IBM Plex Mono",ui-monospace,Menlo,monospace; color:var(--muted);
   white-space:pre-wrap; word-break:break-word; overflow:auto;
-  max-height:calc(100vh - 300px); min-height:320px;}
+  max-height:calc(100vh - 260px); min-height:320px}
+.joblog{background:var(--raised); border:1px solid var(--border); border-radius:var(--radius-card);
+  padding:12px 14px; margin-bottom:16px;
+  font:400 12px/1.6 "IBM Plex Mono",ui-monospace,Menlo,monospace; color:var(--muted);
+  white-space:pre-wrap; word-break:break-word; max-height:200px; overflow:auto}
+.joblog[hidden]{display:none}
+.logtr td{padding:0 10px 14px}
+.logtr .joblog{margin:0; max-height:320px; background:var(--surface)}
 
-/* журнал задач */
-.joblog{background:var(--ground); border-radius:12px; padding:12px 16px; margin:2px 0 8px;
-  font:12px/1.6 ui-monospace,Menlo,monospace; color:var(--muted);
-  white-space:pre-wrap; word-break:break-word; max-height:320px; overflow:auto;}
+/* ---------- состояния ---------- */
+.empty{border:1px dashed var(--control); border-radius:var(--radius-card);
+  padding:12px 14px; color:var(--muted); font-size:var(--fs-body)}
+.emptycol{grid-column:1/-1}
+.errline{display:flex; align-items:center; justify-content:space-between; gap:12px;
+  border:1px solid var(--pill-negative-bg); background:var(--pill-negative-bg);
+  color:var(--pill-negative-ink); border-radius:var(--radius-card); padding:10px 14px; font-size:13px}
+html[data-theme=light] .errline{border-color:var(--pill-warning-border)}
+.skel{background:var(--raised); border-radius:4px; display:inline-block; height:14px}
+.skel.big{height:28px; width:96px}
+.status{display:none; margin-bottom:16px; padding:10px 14px; border-radius:var(--radius-card);
+  background:var(--raised); border:1px solid var(--border); box-shadow:var(--shadow-float);
+  font-size:13px}
+.status.show{display:block}
+.status.err{background:var(--pill-negative-bg); border-color:var(--pill-negative-bg);
+  color:var(--pill-negative-ink)}
+.status.ok{background:var(--pill-positive-bg); border-color:var(--pill-positive-bg);
+  color:var(--pill-positive-ink)}
 
-/* живой лог текущей задачи: один на весь экран, виден из любого раздела */
-.joblog.live{border-left:2px solid var(--accent); margin:0 0 12px; max-height:180px; color:var(--ink);}
-
-/* статус-строка задач */
-.status{display:none; margin:0 0 12px; padding:11px 16px; border-radius:12px;
-  background:var(--surface); font-size:13.5px;}
-.status.show{display:block;}
-.status.err{color:var(--pill-negative-ink); background:var(--pill-negative-bg);}
-.status.ok{color:var(--pill-positive-ink); background:var(--pill-positive-bg);}
-
+/* ---------- планшет ---------- */
+@media (max-width:1180px){
+  .dashgrid{grid-template-columns:1fr}
+  .vkgrid{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .adcards{grid-template-columns:repeat(2,1fr)}
+  .srow{grid-template-columns:1fr; gap:12px; padding:24px 0}
+}
 /* ---------- телефон ---------- */
-@media (max-width:1100px){
-  .dashgrid{grid-template-columns:1fr;}
-  .vkgrid{grid-template-columns:1fr;}
-  .adcards{grid-template-columns:repeat(2,1fr);}
-  .srow{grid-template-columns:1fr; gap:10px; padding:22px 0;}
-}
 @media (max-width:760px){
-  body{grid-template-columns:1fr; grid-template-rows:56px 1fr;}
-  .side{position:fixed; left:0; top:0; bottom:0; width:250px; transform:translateX(-105%);
-    transition:transform .18s; border-right:1px solid var(--rule); background:var(--ground);}
-  .side.open{transform:translateX(0);}
-  main{grid-column:1; padding:18px 16px 56px; max-width:none;}
-  .topbar{grid-column:1; padding:0 16px;}
-  #burger{display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px;
-    border-radius:999px; border:1px solid var(--control); background:transparent; color:var(--muted);
-    font-size:16px; cursor:pointer;}
-  .kstrip{grid-template-columns:repeat(2,1fr);}
-  .kstrip .k{border-top:1px solid var(--rule);}
-  .kstrip .k:nth-child(-n+2){border-top:0;}
-  .kstrip .k:nth-child(odd){border-left:0;}
-  .counts{grid-template-columns:repeat(2,1fr);}
-  .adcards{grid-template-columns:1fr;}
-  .stages{flex-direction:column; align-items:stretch;}
-  .arr{transform:rotate(90deg); align-self:center;}
-  .titlerow{flex-direction:column; align-items:flex-start;}
-  .hideph{display:none;}
-  .tablewrap{padding:4px 8px 8px;}
-  td,th{padding:9px 6px;}
+  body{display:block}
+  .side{position:fixed; left:0; top:0; bottom:0; width:min(280px,84vw); height:100dvh;
+    background:var(--frame); transform:translateX(-105%); transition:transform .18s;
+    box-shadow:var(--shadow-float)}
+  .side.open{transform:none}
+  #burger{display:inline-flex}
+  .hideph{display:none}
+  .sheet{border:0; border-radius:0; margin:0; padding:16px}
+  .kpis{grid-template-columns:repeat(2,1fr); gap:12px}
+  .kpis .kpi:nth-last-child(1):nth-child(odd){grid-column:1/-1}
+  .adcards{grid-template-columns:1fr}
+  .stages{flex-direction:column; align-items:stretch; gap:4px}
+  .stage{padding:6px 0}
+  .arr{transform:rotate(90deg); align-self:flex-start; padding-left:6px}
+  .titlerow{align-items:flex-start}
+  .pager{margin-left:0; width:100%}
+  /* таблица становится списком из двух строк, поля не теряются */
+  thead{display:none}
+  table,tbody,tr,td{display:block; width:auto}
+  tbody tr{height:auto; padding:10px 0; border-top:1px solid var(--rule)}
+  td{border:0; padding:2px 0; display:flex; justify-content:space-between; gap:16px; align-items:center}
+  td::before{content:attr(data-label); color:var(--muted); font-size:13px; flex:none}
+  td.nolabel::before{content:none}
+  td.num,td.r{text-align:left}
+  .acts{justify-content:flex-end}
+  .thumb,.thumbph{width:40px; height:40px}
 }
+.scrim{position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:25}
+.scrim[hidden]{display:none}
+@media (prefers-reduced-motion:reduce){*{transition:none !important; animation:none !important}}
 </style>
 </head>
-<body>
+<body data-page="@@PAGE@@">
+<a class="skip" href="#main">К содержимому</a>
 
-<!-- ======================= сайдбар ======================= -->
+<!-- ======================= рамка: сайдбар ======================= -->
 <aside class="side" id="side">
   <div class="brand">
-    <div class="name">Авито → VK</div>
-    <div class="scope" id="brandScope">сообщество не настроено</div>
+    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+      <rect x="1" y="3" width="12" height="16" rx="3" stroke="currentColor" stroke-width="1.5" opacity=".55"/>
+      <path d="M14.5 11h5.5M17.5 8l3 3-3 3" stroke="var(--accent)" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="7" cy="7.5" r="1.6" fill="var(--accent)"/>
+    </svg>
+    <div>
+      <div class="name">Авито → VK</div>
+      <div class="scope" id="brandScope">сообщество не настроено</div>
+    </div>
   </div>
-  <nav class="nav">
+  <nav class="nav" aria-label="Разделы">
     <div class="ngroup">Конвейер</div>
-    <a class="nitem on" href="#dash" data-view="dash">Дашборд</a>
-    <a class="nitem" href="#ads" data-view="ads">Объявления <span class="cnt act" id="navPending"></span></a>
-    <a class="nitem" href="#sources" data-view="sources">Источники</a>
-    <div class="ngroup">Постинг</div>
-    <a class="nitem" href="#vk" data-view="vk">VK-канал</a>
+    <a class="nitem" href="/" data-nav="dash">Дашборд</a>
+    <a class="nitem" href="/ads" data-nav="ads">Объявления <span class="cnt" id="navPending"></span></a>
+    <a class="nitem" href="/sources" data-nav="sources">Источники</a>
+    <div class="ngroup">Публикация</div>
+    <a class="nitem" href="/vk" data-nav="vk">VK-канал</a>
+    <a class="nitem" href="/jobs" data-nav="jobs">Задачи <span class="cnt" id="navJobs"></span></a>
     <div class="ngroup">Система</div>
-    <a class="nitem" href="#jobs" data-view="jobs">Задачи</a>
-    <a class="nitem" href="#logs" data-view="logs">Логи</a>
-    <a class="nitem" href="#settings" data-view="settings">Настройки</a>
+    <a class="nitem" href="/logs" data-nav="logs">Логи</a>
+    <a class="nitem" href="/settings" data-nav="settings">Настройки</a>
   </nav>
-  <div class="userrow"><span id="whoami">admin</span><a href="/logout">Выйти</a></div>
+  <div class="userrow"><span>admin</span><a href="/logout">Выйти</a></div>
 </aside>
 
-<!-- ======================= топбар ======================= -->
-<header class="topbar">
-  <button id="burger" aria-label="Меню">≡</button>
-  <span class="stamp" id="stamp">…</span>
-  <button class="btn out sm hideph" id="btnRefresh" title="Обновить данные">Обновить</button>
-  <span class="topspacer"></span>
-  <a class="vkswitch" href="#vk" title="Перейти к настройкам VK">
-    <span class="dot" id="vkDot"></span>
-    <span class="nm" id="vkName">VK не настроен</span>
-  </a>
-</header>
+<div class="wrap">
+  <!-- ======================= рамка: топбар ======================= -->
+  <header class="topbar">
+    <button class="iconbtn" id="burger" aria-label="Меню раздела" aria-expanded="false">
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <span class="crumb" id="crumb">Дашборд</span>
+    <span class="topspace"></span>
+    <span class="stamp" id="stamp">…</span>
+    <button class="btn sm hideph" id="btnRefresh">Обновить</button>
+    <button class="iconbtn" id="themeBtn" aria-label="Переключить тему">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path class="moon" d="M13 9.8A5.4 5.4 0 016.2 3 5.4 5.4 0 1013 9.8z"
+              stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+        <g class="sun" style="display:none">
+          <circle cx="8" cy="8" r="3.2" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M8 1v1.6M8 13.4V15M1 8h1.6M13.4 8H15M3 3l1.1 1.1M11.9 11.9L13 13M13 3l-1.1 1.1M4.1 11.9L3 13"
+                stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </g>
+      </svg>
+    </button>
+    <a class="vkswitch" href="/vk" id="vkSwitch">
+      <span class="dot" id="vkDot"></span><span class="nm" id="vkName">VK не настроен</span>
+    </a>
+  </header>
 
-<main>
-<div class="status" id="status"></div>
-<div class="joblog live" id="joblog" style="display:none"></div>
+  <!-- ======================= лист ======================= -->
+  <main class="sheet" id="main">
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <div class="joblog" id="joblog" hidden></div>
+@@CONTENT@@
+  </main>
+</div>
 
-<!-- ======================= ДАШБОРД ======================= -->
-<section class="view on" id="view-dash">
-  <div class="titlerow">
-    <div><h1>Дашборд</h1><p class="sub">Конвейер: парсинг Авито → очередь → автопостинг в сообщество VK</p></div>
-    <div class="actions">
-      <button class="btn out" id="btnPublishDash">Опубликовать пачку</button>
-      <button class="btn primary" id="btnParseDash">Парсить сейчас</button>
-    </div>
-  </div>
-
-  <div class="kstrip" id="kpi">
-    <div class="k"><span>Всего объявлений</span><b><span class="skel" style="width:64px"></span></b></div>
-    <div class="k"><span>В очереди VK</span><b><span class="skel" style="width:48px"></span></b></div>
-    <div class="k"><span>Опубликовано</span><b><span class="skel" style="width:40px"></span></b></div>
-    <div class="k"><span>Недолитые</span><b><span class="skel" style="width:40px"></span></b></div>
-    <div class="k"><span>Ссылок вкл</span><b><span class="skel" style="width:32px"></span></b></div>
-  </div>
-
-  <div class="dashgrid">
-    <div class="maincol">
-      <div>
-        <h3 class="chead">Конвейер</h3>
-        <div class="panel"><div class="stages" id="pipe">
-          <div class="stage"><span class="skel" style="width:120px"></span><span class="skel" style="width:80px"></span><span class="skel" style="width:150px"></span></div>
-          <div class="arr">→</div>
-          <div class="stage"><span class="skel" style="width:120px"></span><span class="skel" style="width:80px"></span><span class="skel" style="width:150px"></span></div>
-          <div class="arr">→</div>
-          <div class="stage"><span class="skel" style="width:120px"></span><span class="skel" style="width:80px"></span><span class="skel" style="width:150px"></span></div>
-        </div></div>
-      </div>
-      <div>
-        <h3 class="chead">Последние объявления <span style="color:var(--faint);font-weight:400;font-size:13px" id="recentCap"></span></h3>
-        <div class="adcards" id="dashRecent"><div class="empty">Загружаю…</div></div>
-      </div>
-    </div>
-    <aside class="rail">
-      <h3 class="chead">Расписание</h3>
-      <div class="panel" id="schedCard"><div class="skel" style="width:180px"></div></div>
-      <h3 class="chead" style="margin-top:8px">Последние посты VK</h3>
-      <div class="panel" id="dashPosts"><div class="skel" style="width:200px"></div></div>
-      <a class="viewall" href="#vk">Все посты</a>
-    </aside>
-  </div>
-</section>
-
-<!-- ======================= ОБЪЯВЛЕНИЯ ======================= -->
-<section class="view" id="view-ads">
-  <div class="titlerow">
-    <div><h1>Объявления</h1><p class="sub" id="adsSub">Что спарсено, что ждёт постинга и что уже вышло в VK</p></div>
-    <div class="actions"><a class="btn out" id="btnExport" href="/export.csv">Экспорт CSV</a></div>
-  </div>
-  <div class="counts" id="adCounts"></div>
-  <div class="toolbar">
-    <input type="search" id="adSearch" placeholder="Поиск: название, описание, id">
-  </div>
-  <div class="panel tablewrap"><table id="adsTable">
-    <thead><tr>
-      <th style="width:38%">Объявление</th><th class="num">Цена</th><th class="hideph">Источник</th>
-      <th class="num hideph">Разобрано</th><th>Статус</th><th class="hideph">VK</th><th class="r">Действия</th>
-    </tr></thead>
-    <tbody id="adsBody"></tbody>
-  </table></div>
-</section>
-
-<!-- ======================= ИСТОЧНИКИ ======================= -->
-<section class="view" id="view-sources">
-  <div class="titlerow">
-    <div><h1>Источники</h1><p class="sub">Ссылки выдачи Авито, которые крон обходит по расписанию.
-      Новая ссылка в первый прогон парсится не более <b id="frlHint">…</b> объявлений, дальше — только свежие.</p></div>
-    <div class="actions"><button class="btn out" id="btnParseAll">Парсить все ссылки</button></div>
-  </div>
-
-  <div class="panel" style="margin-bottom:16px">
-    <div class="frow">
-      <div class="field" style="flex:1 1 420px">
-        <span>Добавить ссылку на выдачу</span>
-        <input type="text" id="newUrl" placeholder="https://www.avito.ru/saransk/telefony" style="border-radius:12px">
-        <small>Категория или поиск с фильтрами — крон будет проверять её по расписанию</small>
-      </div>
-      <button class="btn primary" id="addSource" style="align-self:flex-end">Добавить ссылку</button>
-    </div>
-  </div>
-
-  <div class="panel tablewrap"><table id="srcTable">
-    <thead><tr>
-      <th style="width:30%">Ссылка</th><th>Статус</th><th class="num">Найдено</th>
-      <th class="num">Новых (прогон)</th><th class="num hideph">Объявлений</th>
-      <th class="num hideph">Прогонов</th><th class="num hideph">Проверка</th><th class="r">Действия</th>
-    </tr></thead>
-    <tbody id="srcBody"></tbody>
-  </table></div>
-
-  <div class="panel" style="margin-top:16px">
-    <div class="frow">
-      <div class="field" style="flex:1 1 420px">
-        <span>Разовый парсинг произвольной ссылки</span>
-        <input type="text" id="oneUrls" placeholder="https://www.avito.ru/…" style="border-radius:12px">
-        <small>Не сохраняется в источники — один прогон прямо сейчас</small>
-      </div>
-      <button class="btn out" id="btnOne" style="align-self:flex-end">Парсить разово</button>
-    </div>
-  </div>
-</section>
-
-<!-- ======================= VK ======================= -->
-<section class="view" id="view-vk">
-  <div class="titlerow">
-    <div><h1>VK-канал</h1><p class="sub" id="vkSub">Куда уходит очередь объявлений</p></div>
-    <div class="actions">
-      <button class="btn out" id="btnPreview">Предпросмотр</button>
-      <button class="btn primary" id="btnPublishVK">Опубликовать пачку</button>
-    </div>
-  </div>
-
-  <div class="vkgrid">
-    <div class="panel" id="vkCard"><div class="skel" style="width:220px"></div></div>
-    <div class="panel" id="pvCard"><div class="skel" style="width:220px"></div></div>
-  </div>
-
-  <h3 class="chead">История постов <span style="color:var(--faint);font-weight:400;font-size:13px" id="vkHistCap"></span></h3>
-  <div class="panel tablewrap" style="margin-bottom:16px"><table id="vkHistTable">
-    <thead><tr><th style="width:34%">Объявление</th><th class="num hideph">Фото</th>
-      <th>Опубликован</th><th class="r">Пост</th></tr></thead>
-    <tbody id="vkHistBody"></tbody>
-  </table></div>
-
-  <div class="srule"></div>
-  <div class="srow">
-<div class="slabel">
-      <h3>Настройки канала</h3>
-      <p>Ключ сообщества умеет постить текст. VK запрещает ему загрузку фото (код 27):
-      чтобы посты выходили с картинками, вставьте сюда user-ключ standalone-приложения
-      с правами photos, wall, groups, offline.</p>
-      <div id="oauthBox" style="display:none; margin-top:12px; max-width:420px">
-        <a id="vkOauthLink" class="btn out sm" target="_blank" rel="noopener">Получить user-ключ (для фото)</a>
-        <p class="ro" style="margin-top:8px">Откроется VK — разрешите права photos, wall, groups, offline.
-        Токен появится в адресной строке после <b>access_token=</b>: скопируйте его
-        в поле «VK: ключ доступа» выше и сохраните.</p>
-      </div>
-    </div>
-    <div class="panel spanel">
-      <div class="frow">
-        <div class="field"><span>Пауза между постами, сек</span><input type="number" id="s_vkpauze" min="30" max="7200"></div>
-        <div class="field"><span>Пачка за цикл</span><input type="number" id="s_batch" min="1" max="50"></div>
-        <div class="field" style="justify-content:flex-end"><span>&nbsp;</span>
-          <label class="switch"><input type="checkbox" id="s_reqphotos"><span class="track"></span>Только посты с фото</label>
-        </div>
-      </div>
-      <div class="frow">
-        <div class="field" style="flex:1 1 300px"><span>VK: ключ доступа</span>
-          <input type="password" id="s_vktoken" placeholder="введите новый ключ, чтобы заменить" autocomplete="off" style="border-radius:12px">
-          <small id="vkTokenHint"></small></div>
-        <div class="field" style="flex:1 1 240px"><span>VK: сообщество</span>
-          <input type="text" id="s_vkgroup" placeholder="public12345 или -12345" style="border-radius:12px">
-          <small>id или короткий адрес; применяется сразу после сохранения</small></div>
-      </div>
-      <div class="sfoot"><span class="sub" id="vkSaved" style="margin:0"></span>
-        <button class="btn primary" id="saveVK">Сохранить</button></div>
-    </div>
-  </div>
-</section>
-
-<!-- ======================= ЗАДАЧИ ======================= -->
-<section class="view" id="view-jobs">
-  <div class="titlerow">
-    <div><h1>Задачи</h1><p class="sub">Парсинги и публикации с живым логом; история хранится до следующего рестарта</p></div>
-    <div class="actions"><button class="btn out" id="btnJobsRefresh">Обновить</button></div>
-  </div>
-  <div class="panel tablewrap"><table id="jobsTable">
-    <thead><tr><th style="width:16%">Тип</th><th style="width:14%">Статус</th>
-      <th>Итог</th><th class="num hideph">Начата</th><th class="num hideph">Длительность</th></tr></thead>
-    <tbody id="jobsBody"></tbody>
-  </table></div>
-</section>
-
-<!-- ======================= ЛОГИ ======================= -->
-<section class="view" id="view-logs">
-  <div class="titlerow">
-    <div><h1>Логи</h1><p class="sub" id="logPath"></p></div>
-    <div class="actions">
-      <label class="switch hideph"><input type="checkbox" id="logAuto" checked><span class="track"></span>Авто</label>
-      <a class="btn out" id="logDownload" href="/api/logs?download=1">Скачать</a>
-    </div>
-  </div>
-  <div class="logbox" id="logbox">Загружаю…</div>
-</section>
-
-<!-- ======================= НАСТРОЙКИ ======================= -->
-<section class="view" id="view-settings">
-  <div class="titlerow">
-    <div><h1>Настройки</h1><p class="sub">Расписание и параметры конвейера. Изменения подхватываются кроном без перезапуска.</p></div>
-  </div>
-
-  <div class="srow">
-    <div class="slabel"><h3>Расписание крона</h3>
-      <p>Как часто обходить источники и публиковать очередь. Пока крон на паузе,
-      парсинг и постинг не запускаются, но очередь и ручные задачи работают.</p></div>
-    <div class="panel spanel">
-      <div class="frow">
-        <div class="field"><span>Парсить каждые, мин</span><input type="number" id="s_parse" min="1" max="360"></div>
-        <div class="field"><span>Публиковать каждые, мин</span><input type="number" id="s_publish" min="1" max="360"></div>
-      </div>
-      <div class="switchrow">
-        <div class="tw"><b>Крон на паузе</b><small>Останавливает циклы парсинга и постинга</small></div>
-        <label class="switch"><input type="checkbox" id="s_paused"><span class="track"></span></label>
-      </div>
-      <div class="sfoot"><span class="sub" id="schedSaved" style="margin:0"></span>
-        <button class="btn primary" id="saveSched">Сохранить</button></div>
-    </div>
-  </div>
-  <div class="srule"></div>
-  <div class="srow">
-    <div class="slabel"><h3>Парсинг</h3>
-      <p>Что качать и сколько. «Лимит первого прогона» ограничивает первую выгрузку
-      новой ссылки, чтобы сразу не улетать в сотню карточек.</p></div>
-    <div class="panel spanel">
-      <div class="frow">
-        <div class="field"><span>Лимит первого прогона</span><input type="number" id="s_frl" min="1" max="100"></div>
-        <div class="field"><span>Страниц на ссылку</span><input type="number" id="s_pages" min="1" max="10"></div>
-      </div>
-      <div class="switchrow">
-        <div class="tw"><b>Качать описания</b><small>Заходить в карточку и забирать текст</small></div>
-        <label class="switch"><input type="checkbox" id="s_details"><span class="track"></span></label>
-      </div>
-      <div class="switchrow">
-        <div class="tw"><b>Качать фото</b><small>Складывать фото в data/photos для постов</small></div>
-        <label class="switch"><input type="checkbox" id="s_photos"><span class="track"></span></label>
-      </div>
-      <div class="sfoot"><span class="sub" id="parseSaved" style="margin:0"></span>
-        <button class="btn primary" id="saveParse">Сохранить</button></div>
-    </div>
-  </div>
-  <div class="srule"></div>
-  <div class="srow">
-    <div class="slabel"><h3>Прокси и пути</h3>
-      <p>Прокси задаются в .env (PROXY_STRING). Браузер сам карантинит забаненные
-      адреса и уходит в прямой IP, если пул пуст.</p></div>
-    <div class="panel spanel" id="proxyCard"><div class="skel" style="width:260px"></div></div>
-  </div>
-</section>
-</main>
+<div class="scrim" id="scrim" hidden></div>
 
 <script>
+/* ---------- общий слой: хелперы, состояние, задачи ---------- */
 const $ = (id) => document.getElementById(id);
-const esc = (s) => (s==null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = (s) => (s==null ? '' : String(s)).replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = (n) => (n==null || n==='') ? '—' : new Intl.NumberFormat('ru-RU').format(n);
-const tm = (iso) => iso ? new Date(iso).toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—';
+const tm = (iso) => iso ? new Date(iso).toLocaleTimeString('ru-RU',
+  {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—';
 const dt = (iso) => { if(!iso) return '—'; const d = new Date(iso);
   const p = (x)=>String(x).padStart(2,'0');
-  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); };
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+
+         ' '+p(d.getHours())+':'+p(d.getMinutes()); };
 
-const app = { view:'dash', S:null, running:false,
-  ads:{filter:'all', q:'', page:1, per:50, total:0, counts:{}},
-  hist:{page:1, per:15, total:0}, timers:[] };
+const app = { page: document.body.dataset.page, S: null, running: false, poll: null };
+const PAGE_TITLES = {dash:'Дашборд', ads:'Объявления', sources:'Источники', vk:'VK-канал',
+  jobs:'Задачи', logs:'Логи', settings:'Настройки'};
 
 async function api(path, opts){
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  if (res.status === 401) { location.href = '/login'; throw new Error('нужен вход'); }
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
-function statusMsg(text, cls){ const st = $('status'); if(!st) return;
-  st.className = 'status show' + (cls ? ' ' + cls : ''); st.textContent = text; }
-function pill(cls, text){ return '<span class="pill '+cls+'">'+esc(text)+'</span>'; }
-function skelErr(el, msg){ el.innerHTML = '<div class="errline"><span>'+esc(msg)+'</span>'+
-  '<button class="btn out sm" onclick="location.reload()">Повторить</button></div>'; }
+const post = (path, body) => api(path, {method:'POST',
+  headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {})});
 
-/* ---------- топбар, сайдбар, роутинг ---------- */
+function statusMsg(text, cls){
+  const st = $('status'); if (!st) return;
+  st.className = 'status show' + (cls ? ' ' + cls : '');
+  st.textContent = text;
+  if (cls === 'ok') setTimeout(() => { if (st.textContent === text) st.className = 'status'; }, 9000);
+}
+function pill(cls, text){ return '<span class="pill '+cls+'">'+esc(text)+'</span>'; }
+function dash(v){ return (v==null || v==='') ? '<span style="color:var(--muted)">—</span>' : esc(v); }
+/* ошибка показывается внутри блока, который не загрузился, а не баннером на весь экран */
+function fail(el, msg){
+  if (!el) return;
+  el.innerHTML = '<div class="errline"><span>'+esc(msg)+'</span>'+
+    '<button class="btn sm" onclick="location.reload()">Повторить</button></div>';
+}
+/* скачанный файл мог быть удалён из data/photos — битую миниатюру меняем на плейсхолдер */
+function imgFallback(root){
+  (root || document).querySelectorAll('img[data-fallback]').forEach(img => {
+    img.addEventListener('error', () => {
+      const ph = document.createElement('span');
+      ph.className = img.classList.contains('thumb') ? 'thumbph'
+        : (img.classList.contains('ph') ? 'phph' : 'noimg');
+      ph.textContent = 'нет фото';
+      img.replaceWith(ph);
+    }, {once: true});
+  });
+}
+/* ссылки раздела: состояние фильтров живёт в URL, а не в JS-памяти */
+function linkTo(params){
+  const q = new URLSearchParams(location.search);
+  Object.keys(params).forEach(k => params[k] == null ? q.delete(k) : q.set(k, String(params[k])));
+  const s = q.toString();
+  history.replaceState(null, '', location.pathname + (s ? '?' + s : ''));
+}
+
 function renderChrome(){
   $('stamp').textContent = 'обновлено ' + tm(new Date().toISOString());
+  $('crumb').textContent = PAGE_TITLES[app.page] || 'Авито → VK';
+  document.querySelectorAll('.nitem').forEach(a => {
+    if (a.dataset.nav === app.page) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
   if (!app.S) return;
-  const vk = app.S.vk;
-  $('vkDot').className = 'dot ' + (vk.error ? 'err' : (vk.token_set && vk.group_set ? 'ok' : 'warn'));
-  $('vkName').textContent = vk.error ? 'VK: ' + vk.error : (vk.group_name || 'VK не настроен');
+  const vk = app.S.vk || {}, db = app.S.db || {};
+  $('vkDot').className = 'dot ' + (vk.error ? 'err' : (vk.token_set ? 'ok' : 'warn'));
+  $('vkName').textContent = vk.error ? vk.error : (vk.group_name || 'VK не настроен');
   $('brandScope').textContent = vk.group_name || 'сообщество не настроено';
-  $('navPending').textContent = app.S.db.pending ? fmt(app.S.db.pending) : '';
+  $('navPending').textContent = db.pending ? fmt(db.pending) : '';
+  const live = (app.S.jobs_live || 0);
+  $('navJobs').textContent = live ? fmt(live) : '';
 }
-function stopTimers(){ app.timers.forEach(clearInterval); app.timers = []; }
-function show(v){
-  app.view = v;
-  document.querySelectorAll('.view').forEach(x => x.classList.toggle('on', x.id === 'view-'+v));
-  document.querySelectorAll('.nitem').forEach(a => a.classList.toggle('on', a.dataset.view === v));
-  $('side').classList.remove('open');
-  stopTimers();
-  if (v === 'dash') loadDash();
-  else if (v === 'ads') loadAds();
-  else if (v === 'sources') loadState().then(renderSources).catch(()=>{});
-  else if (v === 'vk') loadVK();
-  else if (v === 'jobs') { loadJobs(); app.timers.push(setInterval(loadJobs, 2500)); }
-  else if (v === 'logs') { loadLogs(); app.timers.push(setInterval(loadLogs, 3000)); }
-  else if (v === 'settings') loadState().then(renderSettings).catch(()=>{});
-}
-window.addEventListener('hashchange', () => show(location.hash.slice(1) || 'dash'));
-$('burger').addEventListener('click', () => $('side').classList.toggle('open'));
-$('btnRefresh').addEventListener('click', () => show(app.view));
-
-/* ---------- состояние ---------- */
 async function loadState(){
   app.S = await api('/api/state');
   renderChrome();
   return app.S;
 }
-function srcStatus(s){
-  if (!s.enabled) return pill('off', 'выкл');
-  const st = s.last_status || 'новая';
-  if (st === 'ok') return pill('ok', 'ok');
-  if (st === 'blocked') return pill('bad', 'blocked');
-  if (st === 'error') return pill('bad', 'ошибка');
-  if (st === 'empty') return pill('warn', 'пусто');
-  return pill('off', st);
+
+/* ---------- запуск фоновой задачи: один живой лог на все разделы ---------- */
+let logSeen = 0;
+function logLine(msg){
+  const el = $('joblog'); el.hidden = false;
+  el.textContent += (el.textContent ? '\n' : '') + msg;
+  el.scrollTop = el.scrollHeight;
 }
-
-/* ---------- ДАШБОРД ---------- */
-async function loadDash(){
-  try {
-    await loadState();
-    const s = app.S, sch = s.scheduler, vk = s.vk, db = s.db;
-    $('kpi').innerHTML = [
-      ['Всего объявлений', fmt(db.total)],
-      ['В очереди VK', fmt(db.pending)],
-      ['Опубликовано', fmt(db.posted)],
-      ['Недолитые', fmt(db.partial)],
-      ['Ссылок вкл', s.sources.filter(x=>x.enabled).length + '<small> / ' + s.sources.length + '</small>'],
-    ].map(([k,v]) => '<div class="k"><span>'+k+'</span><b>'+v+'</b></div>').join('');
-
-    const srcs = s.sources, en = srcs.filter(x=>x.enabled);
-    const badSrc = srcs.filter(x=>x.enabled && (x.last_status==='blocked'||x.last_status==='error')).length;
-    const srcDot = !en.length ? 'warn' : (badSrc ? 'warn' : 'ok');
-    const srcSub = sch.last_parse_result
-      ? 'последний прогон: ' + esc(sch.last_parse_result) : 'прогонов ещё не было';
-    $('pipe').innerHTML =
-      '<div class="stage"><span class="slabel"><span class="dot '+srcDot+'"></span>Источники</span>' +
-      '<span class="sval">'+en.length+'<small style="color:var(--faint)"> / '+srcs.length+'</small></span>' +
-      '<span class="ssub">'+srcSub+'</span></div>' +
-      '<div class="arr">→</div>' +
-      '<div class="stage"><span class="slabel"><span class="dot acc"></span>Очередь</span>' +
-      '<span class="sval">'+fmt(db.pending)+'</span>' +
-      '<span class="ssub">следующая публикация в '+tm(sch.next_publish)+'</span></div>' +
-      '<div class="arr">→</div>' +
-      '<div class="stage"><span class="slabel"><span class="dot '+(vk.error?'err':'ok')+'"></span>VK</span>' +
-      '<span class="sval">' + (vk.group_name
-        ? '<a href="#vk">'+esc(vk.group_name)+'</a>'
-        : '<a href="#vk" style="color:var(--warning)">не настроен</a>') + '</span>' +
-      '<span class="ssub">' + (vk.last_post_url
-        ? 'последний пост: <a href="'+esc(vk.last_post_url)+'" target="_blank" rel="noopener" style="color:var(--accent)">'+esc(vk.last_post_url.replace('https://vk.com/',''))+'</a>'
-        : 'постов ещё не было') + '</span></div>';
-
-    $('schedCard').innerHTML =
-      '<div class="kv"><span>Парсинг</span><b>каждые '+sch.parse_interval_min+' мин</b></div>' +
-      '<div class="kv"><span>следующий</span><b>'+tm(sch.next_parse)+'</b></div>' +
-      '<div class="kv"><span>Публикация VK</span><b>каждые '+sch.publish_interval_min+' мин</b></div>' +
-      '<div class="kv"><span>следующая</span><b>'+tm(sch.next_publish)+'</b></div>' +
-      '<div class="kv"><span>Браузер</span><b>'+(sch.browser_alive ? 'живёт' : 'поднимется при задаче')+'</b></div>' +
-      (sch.paused ? '<div class="kv"><span>Крон</span><b style="color:var(--warning)">на паузе</b></div>' : '');
-
-    const posts = await api('/api/listings?filter=posted&per=5&page=1');
-    $('dashPosts').innerHTML = (posts.items || []).map(p =>
-      '<div class="lrow"><span class="lt">'+tm(p.posted_at)+'</span>' +
-      '<span class="lmain"><a href="'+esc(p.vk_post_url||p.url||'#')+'" target="_blank" rel="noopener">'+esc(p.title||'без названия')+'</a></span>' +
-      '<a class="rlink" href="'+esc(p.vk_post_url||'#')+'" target="_blank" rel="noopener">пост</a></div>'
-    ).join('') || '<div class="empty" style="padding:12px">Опубликованных постов пока нет.</div>';
-
-    const rec = s.recent || [];
-    $('recentCap').textContent = rec.length ? '— последние ' + rec.length + ' из очереди' : '';
-    $('dashRecent').innerHTML = rec.slice(0, 4).map(a =>
-      '<div class="adcard"><div class="ph">' +
-      ((a.photo_urls||[]).slice(0,3).map(u => '<img src="'+esc(u)+'" loading="lazy" alt="">').join('') ||
-       '<span class="noimg">без фото</span>') + '</div>' +
-      '<div class="bd"><a class="t" href="'+esc(a.url||'#')+'" target="_blank" rel="noopener">'+esc(a.title||'без названия')+'</a>' +
-      '<span class="pr num">'+(esc(a.price||'') || (a.price_rub ? fmt(a.price_rub)+' ₽' : 'цена не указана'))+'</span>' +
-      '<span class="mt">'+esc(a.source_label||'')+'</span></div></div>'
-    ).join('') || '<div class="empty">Очередь пуста: крон положит сюда свежие объявления.</div>';
-  } catch (e) { skelErr($('pipe'), 'Не удалось загрузить дашборд: ' + e.message); }
-}
-
-/* ---------- ОБЪЯВЛЕНИЯ ---------- */
-const FLTL = {all:'Все', pending:'В очереди', posted:'Опубликованные', partial:'Недолитые'};
-let adsReq = 0;
-async function loadAds(){
-  const a = app.ads;
-  const req = ++adsReq; // только последний запрос должен попасть в DOM
-  try {
-    const off = (a.page-1) * a.per;
-    const d = await api('/api/listings?filter='+a.filter+'&q='+encodeURIComponent(a.q)+
-                        '&page='+a.page+'&per='+a.per);
-    if (req !== adsReq) return;
-    a.total = d.total; a.counts = d.counts || a.counts;
-    $('adsSub').textContent = 'Всего под фильтром: ' + fmt(d.total) +
-      ' · на странице ' + (d.items ? d.items.length : 0);
-    $('adCounts').innerHTML = Object.keys(FLTL).map(k =>
-      '<button data-f="'+k+'" class="'+(a.filter===k?'sel':'')+'"><span>'+FLTL[k]+'</span><b>'+
-      fmt((d.counts||{})[k] ?? 0)+'</b></button>').join('');
-    renderAdsTable(d.items || [], off);
-    $('btnExport').href = '/export.csv?filter='+a.filter+'&q='+encodeURIComponent(a.q);
-  } catch (e) { if (req === adsReq) skelErr($('adsTable'), 'Не удалось загрузить объявления: ' + e.message); }
-}
-function renderAdsTable(items, off){
-  $('adsBody').innerHTML = items.map(x => {
-    const st = x.posted_to_vk ? pill('ok','опубликовано')
-      : (x.status==='partial' ? pill('warn','недолито') : pill('acc','в очереди'));
-    const vk = x.posted_to_vk
-      ? '<a class="pillink" href="'+esc(x.vk_post_url||'#')+'" target="_blank" rel="noopener">пост</a>'
-      : '<span style="color:var(--faint)">—</span>';
-    const thumb = (x.photo_urls && x.photo_urls[0])
-      ? '<img class="thumb" src="'+esc(x.photo_urls[0])+'" loading="lazy" alt="">'
-      : '<span class="thumbph">—</span>';
-    const price = esc(x.price||'') || (x.price_rub ? fmt(x.price_rub)+' ₽' : '<span style="color:var(--faint)">—</span>');
-    const acts = [];
-    if (!x.posted_to_vk && x.status==='complete')
-      acts.push('<button class="btn txt acc" data-act="pubone" data-id="'+esc(x.avito_id)+'">Опубликовать</button>');
-    if (x.posted_to_vk)
-      acts.push('<button class="btn txt" data-act="requeue" data-id="'+esc(x.avito_id)+'">В очередь</button>');
-    acts.push('<button class="btn txt neg" data-act="del" data-id="'+esc(x.avito_id)+'">Удалить</button>');
-    return '<tr>' +
-      '<td><div class="adcell">'+thumb+'<div class="tw"><div class="t1"><a href="'+esc(x.url||'#')+'" target="_blank" rel="noopener">'+esc(x.title||'без названия')+'</a></div>' +
-      '<div class="t2">id '+esc(x.avito_id)+' · '+esc(x.location||'—')+'</div></div></div></td>' +
-      '<td class="num">'+price+'</td>' +
-      '<td class="hideph"><span class="srcell">'+esc(x.source_label||'—')+'</span></td>' +
-      '<td class="num hideph dtc">'+dt(x.parsed_at)+'</td>' +
-      '<td>'+st+'</td><td class="hideph">'+vk+'</td>' +
-      '<td class="r" style="white-space:nowrap">'+acts.join(' ')+'</td></tr>';
-  }).join('') || '<tr><td colspan="7"><div class="empty">Под этот фильтр ничего не нашлось.</div></td></tr>';
-
-  const from = items.length ? off+1 : 0, to = off + items.length;
-  const pages = Math.max(1, Math.ceil(app.ads.total / app.ads.per));
-  const pg = '<span>'+from+'–'+to+' из '+fmt(app.ads.total)+'</span>' +
-    '<button class="btn out sm" id="pgPrev" '+(app.ads.page<=1?'disabled':'')+'>Назад</button>' +
-    '<button class="btn out sm" id="pgNext" '+(app.ads.page>=pages?'disabled':'')+'>Вперёд</button>';
-  let bar = $('adsPager'); if (!bar) {
-    bar = document.createElement('div'); bar.className = 'pager'; bar.id = 'adsPager';
-    document.querySelector('#view-ads .toolbar').appendChild(bar); }
-  bar.innerHTML = pg;
-  $('pgPrev').onclick = () => { app.ads.page--; loadAds(); };
-  $('pgNext').onclick = () => { app.ads.page++; loadAds(); };
-}
-$('adCounts').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-f]'); if (!b) return;
-  app.ads.filter = b.dataset.f; app.ads.page = 1; loadAds();
-});
-let searchT = null;
-$('adSearch').addEventListener('input', (e) => {
-  clearTimeout(searchT);
-  searchT = setTimeout(() => { app.ads.q = e.target.value.trim(); app.ads.page = 1; loadAds(); }, 350);
-});
-document.addEventListener('click', async (e) => {
-  const b = e.target.closest('button[data-act]'); if (!b) return;
-  const act = b.dataset.act, id = b.dataset.id;
-  if (act === 'del' && !confirm('Удалить объявление '+id+' из базы? Фото на диске останутся.')) return;
-  b.disabled = true;
-  try {
-    if (act === 'del') await api('/api/ads', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({action:'delete', avito_id:id})});
-    else if (act === 'requeue') await api('/api/ads', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({action:'requeue', avito_id:id})});
-    else if (act === 'pubone') await startJob('/vk/publish-one', {avito_id:id}, 'Публикую объявление '+id+'…');
-    loadAds();
-  } catch (err) { statusMsg('Ошибка: ' + err.message, 'err'); b.disabled = false; }
-});
-
-/* ---------- ИСТОЧНИКИ ---------- */
-function renderSources(){
-  const s = app.S; if (!s) return;
-  $('frlHint').textContent = s.settings.first_run_limit;
-  $('srcBody').innerHTML = (s.sources || []).map(x =>
-    '<tr><td><div class="tw"><div class="t1"><a href="'+esc(x.url)+'" target="_blank" rel="noopener">'+
-    esc(x.label || x.url)+'</a></div><div class="t2">'+esc(x.url)+'</div></div></td>' +
-    '<td>'+srcStatus(x)+'</td>' +
-    '<td class="num">'+fmt(x.last_found)+'</td>' +
-    '<td class="num">'+fmt(x.last_new)+'<small style="color:var(--faint)"> / '+fmt(x.total_new)+'</small></td>' +
-    '<td class="num hideph">'+fmt(x.ads)+'</td>' +
-    '<td class="num hideph">'+fmt(x.runs)+'</td>' +
-    '<td class="num hideph dtc">'+(x.last_check ? dt(x.last_check) : '—')+'</td>' +
-    '<td class="r" style="white-space:nowrap">' +
-    '<button class="btn txt acc" data-sact="parse" data-url="'+esc(x.url)+'">Парсить</button>' +
-    '<button class="btn txt" data-sact="toggle" data-url="'+esc(x.url)+'">'+(x.enabled?'Выключить':'Включить')+'</button>' +
-    '<button class="btn txt neg" data-sact="remove" data-url="'+esc(x.url)+'">Удалить</button></td></tr>'
-  ).join('') || '<tr><td colspan="8"><div class="empty">Источников нет — добавьте первую ссылку на выдачу Авито.</div></td></tr>';
-}
-$('srcTable').addEventListener('click', async (e) => {
-  const b = e.target.closest('button[data-sact]'); if (!b) return;
-  const url = b.dataset.url, act = b.dataset.sact;
-  if (act === 'remove' && !confirm('Удалить источник '+url+'?')) return;
-  b.disabled = true;
-  try {
-    if (act === 'parse') { await startJob('/parse', {urls:url, headless:true}, 'Парсинг '+url+'…'); }
-    else await api('/api/sources', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({action:act, url})});
-    await loadState(); renderSources();
-  } catch (err) { statusMsg('Ошибка: ' + err.message, 'err'); b.disabled = false; }
-});
-$('addSource').addEventListener('click', async () => {
-  const url = $('newUrl').value.trim(); if (!url) return;
-  $('addSource').disabled = true;
-  try {
-    await api('/api/sources', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({action:'add', url})});
-    $('newUrl').value = '';
-    statusMsg('Ссылка добавлена: распарсится в ближайший цикл крона.', 'ok');
-    await loadState(); renderSources();
-  } catch (err) { statusMsg('Ошибка: ' + err.message, 'err'); }
-  $('addSource').disabled = false;
-});
-$('btnParseAll').addEventListener('click', () =>
-  startJob('/parse', {urls:'', use_sources:true, headless:true}, 'Запускаю парсинг всех включённых ссылок…'));
-$('btnOne').addEventListener('click', () => {
-  const url = $('oneUrls').value.trim();
-  if (!url) { statusMsg('Вставьте ссылку', 'err'); return; }
-  startJob('/parse', {urls:url, headless:true}, 'Разовый парсинг ссылки…');
-});
-
-/* ---------- VK ---------- */
-async function loadVK(){
-  try {
-    await loadState();
-    const s = app.S, vk = s.vk;
-    $('vkSub').textContent = vk.group_name
-      ? 'Сообщество «'+vk.group_name+'» (id '+ (vk.group_id || '—') +')'
-      : 'Канал не настроен — задайте ключ и сообщество ниже';
-    $('vkCard').innerHTML =
-      '<h3 class="chead">Канал</h3>' +
-      '<div class="kv"><span>Сообщество</span><b>' + (vk.group_name ? esc(vk.group_name) : '—') + '</b></div>' +
-      (vk.wall ? '<div class="kv"><span>Стена</span><b><a href="'+esc(vk.wall)+'" target="_blank" rel="noopener" style="color:var(--accent)">'+esc(vk.wall.replace('https://',''))+'</a></b></div>' : '') +
-      '<div class="kv"><span>Ключ</span><b>' + (vk.token_set ? 'задан' : '<span style="color:var(--warning)">не задан</span>') + '</b></div>' +
-      '<div class="kv"><span>Только посты с фото</span><b>' + (vk.require_photos ? 'да' : 'нет') + '</b></div>' +
-      '<div class="kv"><span>В очереди / опубликовано</span><b>'+fmt(vk.pending)+' / '+fmt(vk.posted)+'</b></div>' +
-      (vk.error ? '<div class="errline" style="margin-top:8px">'+esc(vk.error)+'</div>' : '');
-
-    const pv = await api('/api/preview');
-    if (pv.empty) {
-      $('pvCard').innerHTML = '<h3 class="chead">Следующий пост</h3><div class="empty">Очередь пуста: когда крон разберёт источники, здесь появится предпросмотр следующего поста.</div>';
-    } else {
-      $('pvCard').innerHTML = '<h3 class="chead">Следующий пост</h3>' +
-        '<div class="sub" style="margin:0 0 2px">id '+esc(pv.avito_id)+' · '+esc(pv.title||'')+'</div>' +
-        '<div class="pvrow">' + ((pv.photo_urls||[])[0]
-          ? '<img class="ph" src="'+esc(pv.photo_urls[0])+'" alt="">'
-          : '<span class="phph">без фото</span>') +
-        '<div class="msg">'+esc(pv.message||'')+'</div></div>';
-    }
-
-    const h = app.hist, off = (h.page-1)*h.per;
-    const d = await api('/api/listings?filter=posted&page='+h.page+'&per='+h.per);
-    h.total = d.total;
-    $('vkHistCap').textContent = d.total ? '— всего '+fmt(d.total) : '';
-    $('vkHistBody').innerHTML = (d.items||[]).map(x =>
-      '<tr><td><div class="tw"><div class="t1">'+esc(x.title||'без названия')+'</div>' +
-      '<div class="t2">id '+esc(x.avito_id)+'</div></div></td>' +
-      '<td class="num hideph">'+fmt((x.photo_urls||[]).length)+'</td>' +
-      '<td class="dtc">'+dt(x.posted_at)+'</td>' +
-      '<td class="r"><a class="pillink" href="'+esc(x.vk_post_url||'#')+'" target="_blank" rel="noopener">'+esc((x.vk_post_url||'').replace('https://vk.com/','')||'—')+'</a></td></tr>'
-    ).join('') || '<tr><td colspan="4"><div class="empty">Постов ещё не было: опубликуйте пачку кнопкой выше.</div></td></tr>';
-    let bar = $('histPager');
-    if (!bar) { bar = document.createElement('div'); bar.className='pager'; bar.id='histPager';
-      document.querySelector('#view-vk .tablewrap').before(bar); }
-    const pages = Math.max(1, Math.ceil(h.total/h.per));
-    bar.innerHTML = '<span>'+((d.items||[]).length ? off+1 : 0)+'–'+(off+(d.items||[]).length)+' из '+fmt(h.total)+'</span>' +
-      '<button class="btn out sm" id="hPrev" '+(h.page<=1?'disabled':'')+'>Назад</button>' +
-      '<button class="btn out sm" id="hNext" '+(h.page>=pages?'disabled':'')+'>Вперёд</button>';
-    $('hPrev').onclick = () => { h.page--; loadVK(); };
-    $('hNext').onclick = () => { h.page++; loadVK(); };
-
-    $('s_vkpauze').value = s.settings.vk_min_interval_sec;
-    $('s_batch').value = s.settings.publish_batch;
-    $('s_reqphotos').checked = !!Number(s.settings.vk_require_photos);
-    $('s_vkgroup').value = s.settings.vk_group_id || '';
-    $('s_vktoken').value = '';
-    $('vkTokenHint').textContent = s.settings.vk_access_token_mask
-      ? 'Сохранённый ключ: ' + s.settings.vk_access_token_mask
-      : 'Ключ пока берётся из .env (VK_ACCESS_TOKEN); сохранённый здесь имеет приоритет.';
-
-    const appId = vk.app_id || s.settings.vk_app_id || '';
-    if (appId) {
-      $('oauthBox').style.display = '';
-      $('vkOauthLink').href = 'https://oauth.vk.com/authorize?client_id=' + encodeURIComponent(appId) +
-        '&display=page&redirect_uri=https%3A%2F%2Foauth.vk.com%2Fblank.html' +
-        '&scope=photos%2Cwall%2Cgroups%2Coffline&response_type=token&v=5.199';
-    } else {
-      $('oauthBox').style.display = 'none';
-    }
-  } catch (e) { skelErr($('vkCard'), 'Не удалось загрузить VK-канал: ' + e.message); }
-}
-$('saveVK').addEventListener('click', async () => {
-  $('saveVK').disabled = true;
-  try {
-    const body = {
-      vk_min_interval_sec: Number($('s_vkpauze').value) || 240,
-      publish_batch: Number($('s_batch').value) || 5,
-      vk_require_photos: $('s_reqphotos').checked ? 1 : 0,
-      vk_group_id: $('s_vkgroup').value.trim(),
-    };
-    const tok = $('s_vktoken').value.trim();
-    if (tok) body.vk_access_token = tok;
-    await api('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(body)});
-    $('vkSaved').textContent = 'сохранено ' + new Date().toLocaleTimeString('ru-RU');
-    statusMsg('Настройки канала сохранены.', 'ok');
-    loadVK();
-  } catch (err) { statusMsg('Ошибка: ' + err.message, 'err'); }
-  $('saveVK').disabled = false;
-});
-$('btnPreview').addEventListener('click', () =>
-  startJob('/vk/publish', {dry_run:true}, 'Собираю предпросмотр постов…'));
-$('btnPublishVK').addEventListener('click', () =>
-  startJob('/vk/publish', {dry_run:false}, 'Публикую очередь в VK…'));
-
-/* ---------- ЗАДАЧИ ---------- */
-const KINDL = {parse:'Парсинг', publish:'Публикация VK', one:'Пост объявления'};
-let openJob = null, openJobLog = '';
-
-async function loadJobs(){
-  let d;
-  try { d = await api('/api/jobs'); }
-  catch (e) { $('jobsBody').innerHTML = '<tr><td colspan="5"><div class="empty">Не удалось загрузить задачи: ' + esc(e.message) + '</div></td></tr>'; return; }
-  $('jobsBody').innerHTML = (d.jobs || []).map(j => {
-    const st = j.status==='running' ? pill('acc','выполняется')
-      : (j.status==='error' ? pill('bad','ошибка') : pill('off','готово'));
-    const sum = j.status==='running' ? (j.progress || '…')
-      : (j.status==='error' ? (j.error||'ошибка') : (j.summary || '—'));
-    return '<tr data-job="'+esc(j.id)+'" style="cursor:pointer">' +
-      '<td>'+esc(KINDL[j.kind]||j.kind)+'</td><td>'+st+'</td>' +
-      '<td><span class="cellmain">'+esc(String(sum).slice(0,160))+'</span></td>' +
-      '<td class="num hideph dtc">'+tm(j.created_at)+'</td>' +
-      '<td class="num hideph dtc">'+(j.elapsed ? j.elapsed.toFixed(0)+' с' : '—')+'</td></tr>' +
-      '<tr class="logtr" style="display:none"><td colspan="5"><div class="joblog">…</div></td></tr>';
-  }).join('') || '<tr><td colspan="5"><div class="empty">Задач ещё не было: запустите парсинг или подождите крон.</div></tr>';
-  // Восстановить раскрытие после автообновления
-  if (openJob) {
-    const tr = $('jobsBody').querySelector('tr[data-job="'+CSS.escape(openJob)+'"]');
-    if (tr) {
-      const logtr = tr.nextElementSibling;
-      if (logtr && logtr.classList.contains('logtr')) {
-        logtr.style.display = '';
-        logtr.querySelector('.joblog').textContent = openJobLog || '…';
-      }
-    } else { openJob = null; openJobLog = ''; }
-  }
-}
-$('jobsTable').addEventListener('click', async (e) => {
-  const tr = e.target.closest('tr[data-job]'); if (!tr) return;
-  const logtr = tr.nextElementSibling; if (!logtr || !logtr.classList.contains('logtr')) return;
-  if (logtr.style.display !== 'none') { logtr.style.display = 'none'; openJob = null; openJobLog = ''; return; }
-  logtr.style.display = '';
-  openJob = tr.dataset.job; openJobLog = '…';
-  const box = logtr.querySelector('.joblog');
-  try {
-    const j = await api('/job/' + tr.dataset.job);
-    openJobLog = (j.log || []).join('\n') || 'Лог пуст.';
-    box.textContent = openJobLog;
-    box.scrollTop = box.scrollHeight;
-  } catch (err) { openJobLog = 'Не удалось получить лог: ' + err.message; box.textContent = openJobLog; }
-});
-
-/* ---------- ЛОГИ ---------- */
-let logAuto = true;
-$('logAuto').addEventListener('change', (e) => { logAuto = e.target.checked; if (logAuto) loadLogs(); });
-async function loadLogs(){
-  try {
-    const d = await api('/api/logs?tail=300');
-    $('logPath').textContent = d.path;
-    const box = $('logbox');
-    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
-    box.textContent = (d.lines || []).join('\n') || 'Лог пуст.';
-    if (atBottom) box.scrollTop = box.scrollHeight;
-  } catch (e) { $('logbox').textContent = 'Не удалось прочитать лог: ' + e.message; }
-}
-$('logDownload').addEventListener('click', () =>
-  $('logDownload').href = '/api/logs?download=1&tail=2000');
-
-/* ---------- НАСТРОЙКИ ---------- */
-function renderSettings(){
-  const s = app.S; if (!s) return;
-  $('s_parse').value = s.settings.parse_interval_min;
-  $('s_publish').value = s.settings.publish_interval_min;
-  $('s_paused').checked = !!Number(s.settings.cron_paused || 0);
-  $('s_frl').value = s.settings.first_run_limit;
-  $('s_pages').value = s.settings.pages_per_source;
-  $('s_details').checked = !!Number(s.settings.details_on);
-  $('s_photos').checked = !!Number(s.settings.photos_on);
-  api('/api/proxy').then(p => {
-    let html = '';
-    if (p.configured && p.configured.length)
-      html += '<div class="kv"><span>В .env настроено</span><b>'+p.configured.length+' адресов</b></div>';
-    else html += '<div class="kv"><span>В .env настроено</span><b style="color:var(--warning)">нет — прямой IP</b></div>';
-    if (p.browser_alive)
-      html += '<div class="kv"><span>Сейчас работает</span><b>'+esc(p.current||'—')+'</b></div>' +
-              '<div class="kv"><span>Пул живых / всего</span><b>'+(p.pool_healthy??'—')+' / '+(p.pool_total??'—')+'</b></div>' +
-              '<div class="kv"><span>В карантине</span><b>'+((p.quarantined||[]).length ? esc(p.quarantined.join(', ')) : 'нет')+'</b></div>';
-    else html += '<div class="kv"><span>Браузер</span><b>не запущен — поднимется при задаче</b></div>';
-    html += '<div class="kv"><span>Прямой IP при пустом пуле</span><b>'+(p.allow_direct ? 'разрешён' : 'запрещён')+'</b></div>';
-    html += '<div class="kv"><span>База / фото / лог</span><b style="font-weight:400;color:var(--faint);text-align:right;word-break:break-all">avito.db · data/photos · '+esc(p.log_path||'logs/')+'</b></div>';
-    $('proxyCard').innerHTML = html;
-  }).catch(() => { $('proxyCard').innerHTML = '<div class="errline">Не удалось получить статус прокси</div>'; });
-}
-async function saveSettingsPart(body, stampId){
-  await api('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(body)});
-  $(stampId).textContent = 'сохранено ' + new Date().toLocaleTimeString('ru-RU');
-  statusMsg('Настройки сохранены, крон подхватит их в следующем цикле.', 'ok');
-  loadState();
-}
-$('saveSched').addEventListener('click', async () => {
-  $('saveSched').disabled = true;
-  try {
-    await saveSettingsPart({
-      parse_interval_min: Number($('s_parse').value) || 15,
-      publish_interval_min: Number($('s_publish').value) || 30,
-      cron_paused: $('s_paused').checked ? 1 : 0,
-    }, 'schedSaved');
-  } catch (err) { statusMsg('Ошибка: ' + err.message, 'err'); }
-  $('saveSched').disabled = false;
-});
-$('saveParse').addEventListener('click', async () => {
-  $('saveParse').disabled = true;
-  try {
-    await saveSettingsPart({
-      first_run_limit: Number($('s_frl').value) || 10,
-      pages_per_source: Number($('s_pages').value) || 1,
-      details_on: $('s_details').checked ? 1 : 0,
-      photos_on: $('s_photos').checked ? 1 : 0,
-    }, 'parseSaved');
-  } catch (err) { statusMsg('Ошибка: ' + err.message, 'err'); }
-  $('saveParse').disabled = false;
-});
-
-/* ---------- запуск задач и журнал ---------- */
-let pollTimer = null;
-function logLine(msg){ const el = $('joblog'); el.style.display = '';
-  el.textContent += (el.textContent ? '\n' : '') + msg; el.scrollTop = el.scrollHeight; }
 function startJob(path, body, busyMsg){
-  if (app.running) { statusMsg('Дождитесь завершения текущей задачи', 'err');
-    return Promise.resolve(); }
-  app.running = true;
-  $('joblog').textContent = ''; $('joblog').style.display = '';
+  if (app.running) { statusMsg('Дождитесь завершения текущей задачи', 'err'); return Promise.resolve(); }
+  app.running = true; logSeen = 0;
+  $('joblog').textContent = ''; $('joblog').hidden = false;
   statusMsg(busyMsg);
-  return api(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+  return post(path, body)
     .then(({id}) => {
-      if (app.view !== 'jobs') show('jobs');
-      pollTimer = setInterval(async () => {
-        let job;
-        try { job = await api('/job/' + id); } catch (e) { return; }
-        (job.log || []).forEach(l => logLine(l));
-        if (job.status === 'running') { statusMsg('Выполняется: ' + (job.progress || '…')); return; }
-        clearInterval(pollTimer); app.running = false;
-        if (job.status === 'error') statusMsg('Ошибка: ' + job.error, 'err');
-        else {
-          const ok = (job.posts || []).filter(p => p.ok).length;
-          statusMsg('Готово за ' + (job.elapsed||0).toFixed(0) + ' с: объявлений ' +
-            (job.ads||[]).length + ', постов VK ' + ok + '/' + (job.posts||[]).length, 'ok');
-        }
-        loadJobs();
-      }, 2000);
+      linkTo({job: id});
+      app.poll = setInterval(() => pollJob(id), 2000);
     })
-    .catch(err => { if (err.message !== 'busy') statusMsg('Ошибка: ' + err.message, 'err'); app.running = false; });
+    .catch(err => { statusMsg('Ошибка: ' + err.message, 'err'); app.running = false; });
 }
-$('btnParseDash').addEventListener('click', () =>
-  startJob('/parse', {urls:'', use_sources:true, headless:true}, 'Запускаю парсинг всех ссылок…'));
-$('btnPublishDash').addEventListener('click', () =>
-  startJob('/vk/publish', {dry_run:false}, 'Публикую очередь в VK…'));
+async function pollJob(id){
+  let job;
+  try { job = await api('/job/' + id); }
+  catch (e) { clearInterval(app.poll); app.running = false; return; }
+  const lines = job.log || [];
+  lines.slice(logSeen).forEach(logLine);
+  logSeen = lines.length;
+  if (job.status === 'running') { statusMsg('Выполняется: ' + (job.progress || '…')); return; }
+  clearInterval(app.poll); app.running = false;
+  if (job.status === 'error') statusMsg('Ошибка: ' + job.error, 'err');
+  else {
+    const ok = (job.posts || []).filter(p => p.ok).length;
+    statusMsg('Готово за ' + (job.elapsed || 0).toFixed(0) + ' с: объявлений ' +
+      (job.ads || []).length + ', постов VK ' + ok + '/' + (job.posts || []).length, 'ok');
+  }
+  loadState().catch(() => {});
+  if (window.afterJob) window.afterJob(job);
+}
 
-/* ---------- старт ---------- */
-const qv = new URLSearchParams(location.search).get('view');
-const startView = (qv && $('view-'+qv)) ? qv : (location.hash.slice(1) || 'dash');
-history.replaceState(null, '', '#' + startView);
-show(startView);
-loadState().catch(() => {});
-setInterval(() => { loadState().catch(() => {}); if (app.view === 'dash') loadDash(); }, 10000);
+/* ---------- оболочка: меню, тема, автообновление ---------- */
+function initShell(){
+  const side = $('side'), scrim = $('scrim'), burger = $('burger');
+  const closeMenu = () => { side.classList.remove('open'); scrim.hidden = true;
+    burger.setAttribute('aria-expanded', 'false'); };
+  burger.addEventListener('click', () => {
+    const open = !side.classList.contains('open');
+    side.classList.toggle('open', open); scrim.hidden = !open;
+    burger.setAttribute('aria-expanded', String(open));
+  });
+  scrim.addEventListener('click', closeMenu);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+
+  const themeBtn = $('themeBtn');
+  const paintTheme = () => {
+    const dark = document.documentElement.dataset.theme === 'dark';
+    themeBtn.querySelector('.moon').style.display = dark ? '' : 'none';
+    themeBtn.querySelector('.sun').style.display = dark ? 'none' : '';
+    themeBtn.setAttribute('aria-label', dark ? 'Включить светлую тему' : 'Включить тёмную тему');
+  };
+  themeBtn.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('avito-theme', next); } catch (e) {}
+    paintTheme();
+  });
+  paintTheme();
+
+  $('btnRefresh').addEventListener('click', () => {
+    loadState().catch(() => {});
+    if (window.pageTick) window.pageTick(true);
+  });
+  /* раз в 10 секунд сверяем шапку и текущий раздел: страницы независимы,
+     поэтому перезагрузка не нужна, но данные должны быть свежими */
+  setInterval(() => {
+    loadState().catch(() => {});
+    if (window.pageTick) window.pageTick();
+  }, 10000);
+  const openJob = new URLSearchParams(location.search).get('job');
+  if (openJob) pollJob(openJob);
+  loadState().catch(() => {});
+}
+document.addEventListener('DOMContentLoaded', initShell);
+</script>
+<script>
+@@SCRIPT@@
 </script>
 </body>
 </html>
 """
 
+# --------------------------------------------------------------------- #
+# раздел: дашборд (сводка конвейера)
+# --------------------------------------------------------------------- #
+DASHBOARD_PAGE = r"""
+    <section class="page">
+      <div class="titlerow">
+        <div>
+          <h1>Дашборд</h1>
+          <p class="sub">Состояние конвейера «Авито → VK»: что спарсилось, что ждёт
+            публикации и что пошло не так.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnParseAll">Спарсить всё</button>
+          <button class="btn primary" id="btnPublish">Постить очередь</button>
+        </div>
+      </div>
+
+      <div class="kpis" id="kpis">
+        <div class="kpi"><span>Всего объявлений</span><b class="skel big"></b><em>в базе</em></div>
+        <div class="kpi"><span>В очереди</span><b class="skel big"></b><em>ждут поста</em></div>
+        <div class="kpi"><span>Опубликовано</span><b class="skel big"></b><em>с постом в VK</em></div>
+        <div class="kpi"><span>Новых за сутки</span><b class="skel big"></b><em>за 24 ч</em></div>
+      </div>
+
+      <div class="dashgrid">
+        <div class="maincol">
+          <div class="card block flush">
+            <div class="cardhead">
+              <h2>Конвейер</h2>
+              <span class="mono" style="font-size:12px;color:var(--muted)" id="pipeHint"></span>
+            </div>
+            <div class="stages" id="pipe">
+              <div class="stage"><span class="slabel"><span class="dot acc"></span>Парсинг</span>
+                <span class="sval num">—</span><span class="ssub">последний запуск</span></div>
+              <div class="arr" aria-hidden="true">→</div>
+              <div class="stage"><span class="slabel"><span class="dot"></span>Очередь</span>
+                <span class="sval num">—</span><span class="ssub">объявлений</span></div>
+              <div class="arr" aria-hidden="true">→</div>
+              <div class="stage"><span class="slabel"><span class="dot"></span>Постинг</span>
+                <span class="sval num">—</span><span class="ssub">за сегодня</span></div>
+              <div class="arr" aria-hidden="true">→</div>
+              <div class="stage"><span class="slabel"><span class="dot"></span>На VK</span>
+                <span class="sval num">—</span><span class="ssub">опубликовано всего</span></div>
+            </div>
+            <div class="risks" id="risks"></div>
+          </div>
+
+          <div class="block">
+            <h2 class="sectiontitle">Последние объявления
+              <span class="count"><a href="/ads">все →</a></span></h2>
+            <div class="adcards" id="dashRecent"></div>
+          </div>
+        </div>
+
+        <div class="rail">
+          <div class="card flush">
+            <div class="cardhead"><h3>Крон</h3><span id="schedPill"></span></div>
+            <div id="schedCard"></div>
+          </div>
+          <div class="card flush">
+            <div class="cardhead"><h3>VK-канал</h3><span id="dashVkPill"></span></div>
+            <div id="dashVkCard"></div>
+          </div>
+          <div class="card flush">
+            <div class="cardhead"><h3>Последние посты</h3>
+              <span class="count"><a href="/vk">в VK-канал →</a></span></div>
+            <div id="dashPosts"></div>
+          </div>
+          <div class="card flush">
+            <div class="cardhead"><h3>Последние задачи</h3>
+              <span class="count"><a href="/jobs">все →</a></span></div>
+            <div id="dashJobs"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+"""
+DASHBOARD_SCRIPT = r"""
+/* ---------- дашборд ---------- */
+async function dashAll(){
+  let S;
+  try { S = await loadState(); } catch (e) { return fail($('kpis'), 'Не удалось загрузить состояние: ' + e.message); }
+  const db = S.db || {}, sch = S.scheduler || {}, vk = S.vk || {};
+  const lastRun = (S.sources || []).map(s => s.last_check).filter(Boolean).sort().pop();
+
+  $('kpis').innerHTML = [
+    ['Всего объявлений', fmt(db.total), 'в базе', '/ads?filter=all'],
+    ['В очереди', fmt(db.pending), 'ждут поста', '/ads?filter=pending'],
+    ['Опубликовано', fmt(db.posted), 'с постом в VK', '/ads?filter=posted'],
+    ['Недопаршено', fmt(db.partial), 'статус partial', '/ads?filter=partial']
+  ].map(k => '<div class="kpi"><span>'+k[0]+'</span><b><a href="'+k[3]+'">'+k[1]+
+      '</a></b><em>'+k[2]+'</em></div>').join('');
+
+  /* стрелки-разделители тоже дети #pipe, поэтому берём именно стадии, а не children */
+  const stages = document.querySelectorAll('#pipe .stage');
+  stages[0].querySelector('.sval').textContent = sch.paused ? 'пауза' :
+    (sch.next_parse ? 'след. в ' + tm(sch.next_parse) : '—');
+  stages[0].querySelector('.ssub').textContent = lastRun ? 'последний обход ' + dt(lastRun)
+    : (sch.last_parse_result || 'парсинга ещё не было');
+  stages[1].querySelector('.sval').innerHTML = '<a href="/ads?filter=pending">'+fmt(db.pending)+'</a>';
+  stages[1].querySelector('.ssub').textContent = fmt(db.complete) + ' полных карточек';
+  stages[2].querySelector('.sval').textContent = vk.last_post_at ? dt(vk.last_post_at) : '—';
+  stages[2].querySelector('.ssub').textContent = vk.last_post_url ? 'последний пост в ленте' : 'постов ещё не было';
+  stages[3].querySelector('.sval').innerHTML = '<a href="/ads?filter=posted">'+fmt(db.posted)+'</a>';
+  $('pipeHint').textContent = 'интервал парсинга ' + fmt(sch.parse_interval_min) +
+    ' мин · постинга ' + fmt(sch.publish_interval_min) + ' мин';
+
+  const risks = [];
+  if (vk.error) risks.push(['bad', vk.error, '/settings']);
+  else if (!vk.token_set) risks.push(['warn', 'Ключ VK не задан', '/settings']);
+  if (sch.paused) risks.push(['warn', 'Крон на паузе', '/settings']);
+  if (db.partial) risks.push(['warn', 'Частичные посты: ' + fmt(db.partial), '/ads?filter=partial']);
+  const blocked = (S.sources || []).filter(s => s.last_status === 'blocked').length;
+  if (blocked) risks.push(['bad', 'Источников заблокировано: ' + blocked, '/sources']);
+  if (!(S.sources || []).length) risks.push(['warn', 'Нет источников парсинга', '/sources']);
+  $('risks').innerHTML = risks.length ? risks.map(r => '<span class="risk'+
+    (r[0] === 'warn' ? ' warn' : '')+'"><a href="'+r[2]+'">'+esc(r[1])+'</a></span>').join('')
+    : '<span class="risk" style="background:var(--pill-positive-bg)"><a style="color:var(--pill-positive-ink)">Проблем нет</a></span>';
+
+  const paused = !!sch.paused;
+  $('schedPill').innerHTML = paused ? pill('warn', 'пауза') : pill('ok', 'активен');
+  $('schedCard').innerHTML = [
+    ['следующий парсинг', tm(sch.next_parse)],
+    ['следующий постинг', tm(sch.next_publish)],
+    ['интервалы', fmt(sch.parse_interval_min) + ' / ' + fmt(sch.publish_interval_min) + ' мин'],
+    ['браузер', sch.browser_alive ? 'запущен' : 'остановлен'],
+    ['итог прохода', sch.last_parse_result || '—']
+  ].map(r => '<div class="kv"><span>'+r[0]+'</span><b>'+dash(r[1])+'</b></div>').join('');
+
+  $('dashVkPill').innerHTML = vk.error ? pill('bad', 'ошибка')
+    : (vk.token_set ? pill('ok', 'готов') : pill('warn', 'нет ключа'));
+  const min = (vk.min_interval_sec || 0) / 60;
+  $('dashVkCard').innerHTML = [
+    ['ключ', vk.token_set ? (vk.token_kind || 'установлен') + ' · ' + esc(vk.token_mask || '') : 'не задан'],
+    ['сообщество', vk.group_name || 'не определено'],
+    ['стена', vk.wall || '—'],
+    ['фото', vk.can_upload_photos ? 'разрешены ключом' : 'запрещены ключом'],
+    ['очередь', fmt(vk.pending) + ' шт'],
+    ['мин. пауза', min ? min.toFixed(1) + ' мин' : 'выключена'],
+    ['требовать фото', vk.require_photos ? 'да' : 'нет']
+  ].map(r => '<div class="kv"><span>'+r[0]+'</span><b>'+esc(r[1])+'</b></div>').join('') +
+    (vk.error ? '<div style="padding:10px 16px;color:var(--negative);font-size:12px">'+esc(vk.error)+'</div>' : '');
+
+  $('dashPosts').innerHTML = (S.recent_posts || []).length
+    ? S.recent_posts.map(p => '<div class="lrow"><span class="lt">'+tm(p.posted_at)+
+      '</span><a class="lmain" href="'+(p.vk_post_url || '#')+'" target="_blank" rel="noopener">'+
+      esc(p.title || 'без названия')+'</a>'+
+      (p.vk_post_url ? '<a class="rlink" href="'+p.vk_post_url+'" target="_blank" rel="noopener">открыть</a>' : '')+
+      '</div>').join('')
+    : '<div class="empty" style="margin:16px">Постов ещё не было</div>';
+}
+async function dashJobs(){
+  const box = $('dashJobs');
+  let d;
+  try { d = await api('/api/jobs'); } catch (e) { return; }
+  const jobs = (d.jobs || []).slice(0, 6);
+  box.innerHTML = jobs.length
+    ? jobs.map(j => '<div class="lrow"><span class="lt">'+tm(j.created_at)+
+      '</span><span class="lmain">'+esc(j.kind)+ (j.status === 'error'
+        ? ' <b style="color:var(--negative)">ошибка</b>' : ' · ' + esc(j.summary || j.status)) +
+      '</span><a class="rlink" href="/jobs?job='+encodeURIComponent(j.id)+'">лог</a></div>').join('')
+    : '<div class="empty" style="margin:16px">Задач ещё не было</div>';
+}
+async function dashRecent(){
+  const box = $('dashRecent');
+  try {
+    const d = await api('/api/listings?per=6');
+    const rows = d.items || [];
+    if (!rows.length) { box.innerHTML = '<div class="empty emptycol">Пока ничего не спаррено — запустите парсинг.</div>'; return; }
+    box.innerHTML = rows.map(a => {
+      const ph = (a.photo_urls || []).slice(0, 3).map(u =>
+        '<img src="' + esc(u) + '" alt="" loading="lazy" data-fallback>').join('');
+      return '<article class="adcard"><div class="ph">' + (ph ||
+        '<span class="noimg">нет фото</span>') + '</div><div class="bd">' +
+        '<a class="t" href="' + (a.url || '#') + '" target="_blank" rel="noopener">' + esc(a.title) + '</a>' +
+        '<span class="pr">' + dash(a.price) + '</span>' +
+        '<span class="mt">' + esc(a.location || '') + ' · ' + dt(a.parsed_at) + '</span>' +
+        '</div></article>';
+    }).join('');
+    imgFallback(box);
+  } catch (e) { fail(box, 'Не удалось загрузить объявления: ' + e.message); }
+}
+$('btnParseAll').addEventListener('click', () =>
+  startJob('/parse', {use_sources: true}, 'Парсинг всех активных источников запущен…'));
+$('btnPublish').addEventListener('click', () =>
+  startJob('/vk/publish', {}, 'Постинг запущен…'));
+window.pageTick = () => { loadState().then(() => dashAll()).catch(() => {}); };
+window.afterJob = () => { loadState().then(() => dashAll()).catch(() => {}); dashRecent().catch(() => {}); dashJobs().catch(() => {}); };
+document.addEventListener('DOMContentLoaded', () => {
+  loadState().then(() => dashAll()).catch(() => {});
+  dashRecent().catch(() => {});
+  dashJobs().catch(() => {});
+});
+"""
+
+# --------------------------------------------------------------------- #
+# раздел: объявления
+# --------------------------------------------------------------------- #
+ADS_PAGE = r"""
+    <section class="page">
+      <div class="titlerow">
+        <div>
+          <h1>Объявления</h1>
+          <p class="sub">База спаренных объявлений и очередь публикаций. Фильтр и поиск —
+            в адресной строке, ссылку можно передать или открыть напрямую.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnRequeueSel" disabled>Вернуть в очередь</button>
+          <button class="btn" id="btnDelSel" disabled>Удалить</button>
+          <a class="btn" href="/export.csv" id="adsExport">Выгрузить CSV</a>
+          <a class="btn" href="/api/listings?format=json" id="adsJson">JSON</a>
+        </div>
+      </div>
+
+      <div class="tabs" id="adCounts"></div>
+      <div class="toolbar">
+        <input type="search" id="adSearch" placeholder="Поиск по названию, описанию, городу, ID" aria-label="Поиск объявлений">
+        <button class="btn sm" id="btnSearch">Искать</button>
+        <span class="note" id="adsCount"></span>
+        <div class="pager">
+          <button class="btn sm" id="adsPrev">Назад</button>
+          <span id="adsPage">1</span>
+          <button class="btn sm" id="adsNext">Вперёд</button>
+        </div>
+      </div>
+
+      <div class="card flush">
+        <div class="tablewrap">
+          <table>
+            <thead><tr>
+              <th style="width:34px"><input type="checkbox" id="adsAll" aria-label="Выбрать все на странице"></th>
+              <th>Объявление</th>
+              <th>Цена</th>
+              <th>Город</th>
+              <th>Источник</th>
+              <th>Статус</th>
+              <th>Обновлено</th>
+              <th class="r">Действия</th>
+            </tr></thead>
+            <tbody id="adsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+"""
+ADS_SCRIPT = r"""
+/* ---------- объявления: фильтр/поиск/страницы живут в URL ---------- */
+const ads = {flt: 'all', q: '', page: 1, per: 25, counts: {}};
+const picked = new Set();
+
+function adsReadUrl(){
+  const q = new URLSearchParams(location.search);
+  ads.flt = q.get('filter') || 'all';
+  ads.q = q.get('q') || '';
+  ads.page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1);
+}
+function adsWriteUrl(){
+  linkTo({filter: ads.flt === 'all' ? null : ads.flt, q: ads.q || null,
+          page: ads.page > 1 ? ads.page : null});
+}
+function statusPill(a){
+  if (a.posted_to_vk) return pill('ok', 'опубл.' + (a.vk_post_url ? '' : ' без ссылки'));
+  if (a.status === 'partial') return pill('warn', 'недопаршено');
+  return pill('acc', 'в очереди');
+}
+function adsCounts(d){
+  ads.counts = d.counts || {};
+  const defs = [['all', 'Все'], ['pending', 'В очереди'], ['posted', 'Опубликовано'], ['partial', 'Частично']];
+  $('adCounts').innerHTML = defs.map(f => '<button data-f="' + f[0] + '"' +
+    (f[0] === ads.flt ? ' class="sel"' : '') + '>' + f[1] +
+    '<b class="num">' + fmt(ads.counts[f[0]]) + '</b></button>').join('');
+  $('adCounts').querySelectorAll('button[data-f]').forEach(b => b.addEventListener('click', () => {
+    ads.flt = b.dataset.f; ads.page = 1; adsWriteUrl(); adsLoad();
+  }));
+}
+async function adsLoad(){
+  const body = $('adsBody');
+  body.innerHTML = '<tr><td class="nolabel" colspan="8" style="color:var(--muted)">Загрузка…</td></tr>';
+  const qs = 'filter=' + encodeURIComponent(ads.flt) + '&q=' + encodeURIComponent(ads.q) +
+             '&page=' + ads.page + '&per=' + ads.per;
+  let d;
+  try { d = await api('/api/listings?' + qs); }
+  catch (e) { fail(body, 'Не удалось загрузить объявления: ' + e.message); return; }
+  adsCounts(d);
+  const rows = d.items || [];
+  const total = d.total || 0, pages = Math.max(1, Math.ceil(total / ads.per));
+  $('adsCount').textContent = 'показано ' + fmt(rows.length) + ' из ' + fmt(total);
+  $('adsPage').textContent = ads.page + ' / ' + pages;
+  $('adsPrev').disabled = ads.page <= 1;
+  $('adsNext').disabled = ads.page >= pages;
+  $('adsExport').href = '/export.csv?' + qs;
+  $('adsJson').href = '/api/listings?' + qs;
+  $('adsAll').checked = false;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td class="nolabel" colspan="8"><div class="empty" style="margin:8px 0">' +
+      (ads.q ? 'Ничего не найдено по запросу «' + esc(ads.q) + '»' : 'В этом фильтре пока пусто') +
+      '</div></td></tr>';
+    syncPick();
+    return;
+  }
+  body.innerHTML = rows.map(a => {
+    const img = (a.photo_urls || [])[0];
+    const thumb = img
+      ? '<img class="thumb" src="' + esc(img) + '" alt="" loading="lazy" data-fallback>'
+      : '<span class="thumbph">нет&nbsp;фото</span>';
+    const note = a.status === 'partial'
+      ? '<div class="t2" style="color:var(--warning)">карточка не дочитана (partial)</div>' : '';
+    return '<tr data-id="' + esc(a.avito_id) + '">' +
+      '<td class="nolabel"><input type="checkbox" class="pick" aria-label="Выбрать объявление"></td>' +
+      '<td class="nolabel"><div class="adcell">' + thumb + '<div class="tw">' +
+        '<a class="t1" href="' + (a.url || '#') + '" target="_blank" rel="noopener">' + esc(a.title) + '</a>' +
+        '<div class="idcell mono">id ' + esc(a.avito_id) + ' · ' + esc(a.source_label || '') + '</div>' +
+        note + '</div></div></td>' +
+      '<td class="num" data-label="Цена">' + dash(a.price) + '</td>' +
+      '<td data-label="Город"><span class="srcell">' + dash(a.location) + '</span></td>' +
+      '<td data-label="Источник"><span class="srcell" title="' + esc(a.source_url || '') + '">' +
+        dash(a.source_label || a.source_url) + '</span></td>' +
+      '<td data-label="Статус">' + statusPill(a) + (a.vk_post_url
+        ? ' <a class="rlink" href="' + esc(a.vk_post_url) + '" target="_blank" rel="noopener">пост</a>'
+        : '') + '</td>' +
+      '<td data-label="Парсинг" class="dtc">' + dt(a.parsed_at) + '</td>' +
+      '<td class="r nolabel"><div class="acts">' +
+        '<button class="btn txt acc" data-act="one">Запостить</button>' +
+        '<button class="btn txt" data-act="requeue">В очередь</button>' +
+        '<button class="btn txt neg" data-act="del">Удалить</button>' +
+      '</div></td></tr>';
+  }).join('');
+  body.querySelectorAll('tr[data-id]').forEach(tr => {
+    const id = tr.dataset.id;
+    tr.querySelector('.pick').addEventListener('change', (e) => {
+      e.target.checked ? picked.add(id) : picked.delete(id); syncPick();
+    });
+    tr.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => rowAction(b.dataset.act, id)));
+  });
+  imgFallback(body);
+  syncPick();
+}
+function syncPick(){
+  $('btnDelSel').disabled = $('btnRequeueSel').disabled = picked.size === 0;
+  $('btnDelSel').textContent = picked.size ? 'Удалить (' + picked.size + ')' : 'Удалить';
+  $('btnRequeueSel').textContent = picked.size ? 'Вернуть в очередь (' + picked.size + ')' : 'Вернуть в очередь';
+}
+async function rowAction(act, id){
+  const route = act === 'one' ? '/vk/publish-one' : '/api/ads';
+  const body = act === 'one' ? {avito_id: id}
+    : {action: act === 'del' ? 'delete' : 'requeue', avito_id: id};
+  if (act === 'del' && !confirm('Удалить объявление ' + id + ' из базы?')) return;
+  try {
+    if (act === 'one') await startJob(route, body, 'Постим объявление ' + id + '…');
+    else { await post(route, body); statusMsg('Готово', 'ok'); adsLoad(); loadState().catch(() => {}); }
+  } catch (e) { statusMsg('Ошибка: ' + e.message, 'err'); }
+}
+async function bulkAction(action){
+  if (!picked.size) return;
+  if (action === 'delete' && !confirm('Удалить ' + picked.size + ' объявлений из базы?')) return;
+  const ids = [...picked];
+  let done = 0, failed = 0;
+  for (const id of ids) {
+    try { await post('/api/ads', {action, avito_id: id}); done++; }
+    catch (e) { failed++; }
+  }
+  picked.clear();
+  statusMsg('Обработано ' + done + (failed ? ', ошибок ' + failed : ''), failed ? 'err' : 'ok');
+  adsLoad(); loadState().catch(() => {});
+}
+$('btnSearch').addEventListener('click', () => {
+  ads.q = $('adSearch').value.trim(); ads.page = 1; adsWriteUrl(); adsLoad();
+});
+$('adSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnSearch').click(); });
+$('adsPrev').addEventListener('click', () => { ads.page = Math.max(1, ads.page - 1); adsWriteUrl(); adsLoad(); });
+$('adsNext').addEventListener('click', () => { ads.page += 1; adsWriteUrl(); adsLoad(); });
+$('adsAll').addEventListener('change', (e) => {
+  document.querySelectorAll('#adsBody .pick').forEach(c => {
+    c.checked = e.target.checked;
+    const id = c.closest('tr').dataset.id;
+    e.target.checked ? picked.add(id) : picked.delete(id);
+  });
+  syncPick();
+});
+$('btnDelSel').addEventListener('click', () => bulkAction('delete'));
+$('btnRequeueSel').addEventListener('click', () => bulkAction('requeue'));
+window.pageTick = () => { if (!app.running) adsLoad().catch(() => {}); };
+document.addEventListener('DOMContentLoaded', () => {
+  adsReadUrl();
+  $('adSearch').value = ads.q;
+  adsWriteUrl();
+  adsLoad().catch(() => {});
+});
+"""
+
+# --------------------------------------------------------------------- #
+# раздел: источники
+# --------------------------------------------------------------------- #
+SOURCES_PAGE = r"""
+    <section class="page">
+      <div class="titlerow">
+        <div>
+          <h1>Источники</h1>
+          <p class="sub">Страницы Авито, которые крон обходит по кругу. Отключение не удаляет
+            уже спаренные объявления.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnParseSources">Парсить все активные</button>
+          <button class="btn primary" id="btnAddSource">Добавить источник</button>
+        </div>
+      </div>
+
+      <div class="card block" id="srcFormCard" hidden>
+        <div class="frow">
+          <div class="field" style="flex:1 1 360px">
+            <span>Ссылка на выдачу Авито</span>
+            <input type="search" id="srcUrl" placeholder="https://www.avito.ru/...">
+            <small>например: https://www.avito.ru/rossiya/prodazh_avto</small>
+          </div>
+          <div class="field">
+            <span>Объявлений за пуск</span>
+            <input type="number" id="srcLimit" min="1" max="100" placeholder="10">
+            <small>лимит на карточки, не на страницы выдачи</small>
+          </div>
+          <div class="field" style="justify-content:flex-end">
+            <button class="btn primary" id="btnSaveSource">Сохранить и спарсить</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card flush">
+        <div class="tablewrap">
+          <table>
+            <thead><tr>
+              <th>Источник</th><th>Метка</th><th class="num">Всего</th><th class="num">Новых</th>
+              <th class="num">Запусков</th><th>Последний статус</th><th>Проверен</th>
+              <th class="r">Действия</th>
+            </tr></thead>
+            <tbody id="srcBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+"""
+SOURCES_SCRIPT = r"""
+/* ---------- источники ---------- */
+const SRC_STATUS = {ok: ['ok', 'ok'], empty: ['acc', 'пусто'],
+  blocked: ['warn', 'блокировка'], error: ['bad', 'ошибка']};
+async function srcLoad(){
+  const body = $('srcBody');
+  try { await loadState(); } catch (e) { return fail(body, 'Не удалось загрузить источники: ' + e.message); }
+  const rows = app.S.sources || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td class="nolabel" colspan="8"><div class="empty" style="margin:8px 0">' +
+      'Источников нет — добавьте выдачу Авито</div></td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(s => {
+    const st = SRC_STATUS[s.last_status] || ['off', s.last_status || 'ещё не проверялся'];
+    const off = s.enabled === false ? ' ' + pill('off', 'отключён') : '';
+    return '<tr data-url="' + esc(s.url) + '">' +
+      '<td class="nolabel" style="max-width:340px"><span class="srcell" title="' + esc(s.url) + '">' +
+        '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.url) + '</a></span></td>' +
+      '<td data-label="Метка">' + dash(s.label) + off + '</td>' +
+      '<td class="num" data-label="Всего">' + fmt(s.total_new) + '</td>' +
+      '<td class="num" data-label="Новых">' + fmt(s.last_new) + '</td>' +
+      '<td class="num" data-label="Запусков">' + fmt(s.runs) + '</td>' +
+      '<td data-label="Последний статус">' + pill(st[0], st[1]) +
+        (s.last_found ? ' <span class="t2">' + fmt(s.last_found) + ' шт</span>' : '') + '</td>' +
+      '<td data-label="Проверен" class="dtc">' + dt(s.last_check) + '</td>' +
+      '<td class="r nolabel"><div class="acts">' +
+        '<button class="btn txt acc" data-act="parse">Парсить</button>' +
+        '<button class="btn txt" data-act="toggle">' + (s.enabled === false ? 'Включить' : 'Отключить') + '</button>' +
+        '<button class="btn txt neg" data-act="del">Удалить</button>' +
+      '</div></td></tr>';
+  }).join('');
+  body.querySelectorAll('tr[data-url]').forEach(tr => {
+    const url = tr.dataset.url;
+    tr.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => srcAction(b.dataset.act, url)));
+  });
+}
+async function srcAction(act, url){
+  if (act === 'parse') return startJob('/parse', {url}, 'Парсинг запущен…');
+  if (act === 'toggle') {
+    await post('/api/sources', {action: 'toggle', url});
+    statusMsg('Готово', 'ok'); srcLoad(); return;
+  }
+  if (act === 'del') {
+    if (!confirm('Удалить источник из списка отслеживаемых? Объявления останутся в базе.')) return;
+    await post('/api/sources', {action: 'remove', url});
+    statusMsg('Источник удалён', 'ok'); srcLoad();
+  }
+}
+$('btnAddSource').addEventListener('click', () => {
+  const card = $('srcFormCard');
+  card.hidden = !card.hidden;
+  if (!card.hidden) $('srcUrl').focus();
+});
+$('btnSaveSource').addEventListener('click', async () => {
+  const url = $('srcUrl').value.trim();
+  if (!url) { statusMsg('Введите ссылку на выдачу Авито', 'err'); return; }
+  try {
+    await post('/api/sources', {action: 'add', url});
+    $('srcUrl').value = '';
+    $('srcFormCard').hidden = true;
+    const limit = parseInt($('srcLimit').value || '0', 10) || undefined;
+    await srcLoad();
+    startJob('/parse', {url, limit}, 'Парсинг запущен…');
+  } catch (e) { statusMsg('Ошибка: ' + e.message, 'err'); }
+});
+$('btnParseSources').addEventListener('click', () =>
+  startJob('/parse', {use_sources: true}, 'Парсинг всех активных запущен…'));
+window.pageTick = () => { if (!app.running) srcLoad().catch(() => {}); };
+document.addEventListener('DOMContentLoaded', () => srcLoad().catch(() => {}));
+"""
+
+# --------------------------------------------------------------------- #
+# раздел: VK-канал
+# --------------------------------------------------------------------- #
+VK_PAGE = r"""
+    <section class="page">
+      <div class="titlerow">
+        <div>
+          <h1>VK-канал</h1>
+          <p class="sub">Ключ сообщества, права на публикацию и фото, очередь постов и
+            история уже опубликованного.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnVkCheck">Проверить права</button>
+          <a class="btn" href="/settings">Настроить ключ</a>
+          <button class="btn primary" id="btnVkPublish">Постить очередь</button>
+        </div>
+      </div>
+
+      <div class="kpis" id="vkKpis">
+        <div class="kpi"><span>В очереди</span><b class="skel big"></b><em>ждут поста</em></div>
+        <div class="kpi"><span>Опубликовано всего</span><b class="skel big"></b><em>с постом в VK</em></div>
+        <div class="kpi"><span>За сегодня</span><b class="skel big"></b><em>постов</em></div>
+        <div class="kpi"><span>Последний пост</span><b class="skel big"></b><em>время</em></div>
+      </div>
+
+      <div class="vkgrid">
+        <div class="card flush">
+          <div class="cardhead"><h2>Сообщество и ключ</h2><span id="vkPill"></span></div>
+          <div id="vkCard"></div>
+        </div>
+        <div class="card flush">
+          <div class="cardhead"><h2>Предпросмотр следующего поста</h2>
+            <button class="btn sm" id="btnPvRefresh">Обновить</button></div>
+          <div id="pvCard" style="padding:16px"></div>
+        </div>
+      </div>
+
+      <div class="block" style="margin-top:var(--gap)">
+        <h2 class="sectiontitle">История публикаций
+          <span class="count"><a href="/ads?filter=posted">все опубликованные →</a></span></h2>
+        <div class="card flush">
+          <div class="tablewrap">
+            <table>
+              <thead><tr>
+                <th>Когда</th><th>Объявление</th><th>Пост в VK</th><th class="num">Фото</th>
+              </tr></thead>
+              <tbody id="vkHistBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+"""
+VK_SCRIPT = r"""
+/* ---------- VK-канал ---------- */
+async function vkLoad(){
+  const box = $('vkCard');
+  let vk, S;
+  try { S = app.S || await loadState(); vk = await api('/api/vk'); }
+  catch (e) { return fail(box, 'Не удалось получить состояние VK: ' + e.message); }
+  const min = (vk.min_interval_sec || 0) / 60;
+  $('vkPill').innerHTML = vk.error ? pill('bad', 'ошибка')
+    : (vk.token_set ? pill('ok', 'готов') : pill('warn', 'нет ключа'));
+  const rows = [
+    ['ключ', vk.token_set ? (vk.token_kind || 'установлен') + ' · ' + (vk.token_mask || '') : 'не задан'],
+    ['сообщество', vk.group_name || 'не определено'],
+    ['id сообщества', vk.group_id || '—'],
+    ['стена', vk.wall || '—'],
+    ['права', vk.is_admin ? 'подтверждены (can_post)' : 'не подтверждены'],
+    ['загрузка фото', vk.can_upload_photos ? 'разрешена ключом' : 'запрещена ключом (код 27)'],
+    ['приложение', vk.app_id ? 'id ' + vk.app_id + ' (standalone OAuth)' : 'VK_APP_ID не задан'],
+    ['макс. фото в посте', fmt(vk.max_photos)],
+    ['требовать фото', vk.require_photos ? 'да' : 'нет'],
+    ['мин. пауза между постами', min ? min.toFixed(1) + ' мин' : 'выключена'],
+    ['шаблон поста', vk.template ? (String(vk.template).split('\n')[0].slice(0, 40) + '…') : 'по умолчанию'],
+    ['последний пост', vk.last_post_at ? dt(vk.last_post_at) : '—']
+  ];
+  box.innerHTML = rows.map(r => '<div class="kv"><span>' + r[0] + '</span><b>' + esc(r[1]) + '</b></div>').join('') +
+    (vk.error ? '<div style="padding:12px 16px;color:var(--negative);font-size:13px;border-top:1px solid var(--rule)">' + esc(vk.error) + '</div>' : '') +
+    (vk.token_set && vk.can_upload_photos === false
+      ? '<div style="padding:12px 16px;font-size:13px;color:var(--muted);border-top:1px solid var(--rule)">' +
+        'Ключ сообщества не умеет загружать фото на стену — нужен <b>ключ пользователя</b>, ' +
+        'полученный через standalone OAuth.</div>' : '') +
+    (vk.oauth_url ? '<div style="padding:12px 16px;border-top:1px solid var(--rule)">' +
+      '<a class="btn sm" id="vkOauthLink" href="' + esc(vk.oauth_url) + '" target="_blank" rel="noopener">' +
+      'Получить ключ пользователя</a><small style="display:block;margin-top:8px;color:var(--muted);font-size:12px">' +
+      'scope: photos, wall, groups, offline · redirect: oauth.vk.com/blank.html</small></div>' : '');
+
+  const last = (S.recent_posts || [])[0];
+  $('vkKpis').innerHTML = [
+    ['В очереди', fmt(vk.pending), 'ждут поста', '/ads?filter=pending'],
+    ['Опубликовано', fmt(vk.posted), 'с постом в VK', '/ads?filter=posted'],
+    ['Недопаршено', fmt(S.db ? S.db.partial : 0), 'не пойдут в пост', '/ads?filter=partial'],
+    ['Последний пост', last ? dt(last.posted_at) : '—',
+      last ? (last.title || '') : 'публикаций ещё не было', last ? (last.vk_post_url || '') : '']
+  ].map(k => '<div class="kpi"><span>' + k[0] + '</span><b>' + (k[3] ? '<a href="' + esc(k[3]) +
+    '" target="_blank" rel="noopener">' + k[1] + '</a>' : k[1]) +
+    '</b><em>' + esc(k[2]) + '</em></div>').join('');
+
+  await vkPreview();
+  await vkHistory();
+}
+async function vkPreview(){
+  const box = $('pvCard');
+  box.innerHTML = '<span class="skel" style="width:60%"></span>';
+  let p;
+  try { p = await api('/api/preview'); }
+  catch (e) { return fail(box, 'Нет предпросмотра: ' + e.message); }
+  if (!p || p.empty || !p.title) { box.innerHTML = '<div class="empty">Очередь пуста — нечего постить</div>'; return; }
+  const imgs = (p.photo_urls || []).slice(0, 3).map(u =>
+    '<img class="ph" src="' + esc(u) + '" alt="" loading="lazy" data-fallback>').join('');
+  box.innerHTML = '<div class="t2 mono" style="margin-bottom:8px">id ' + esc(p.avito_id || '') + ' · ' +
+    esc(p.title) + '</div>' +
+    '<div class="msg">' + esc(p.message || '') + '</div>' +
+    (imgs ? '<div class="pvrow">' + imgs + '</div>'
+           : '<div class="pvrow"><span class="phph">фото нет</span><span class="t2">пост уйдёт без вложений</span></div>');
+  imgFallback(box);
+}
+async function vkHistory(){
+  const body = $('vkHistBody');
+  let d;
+  try { d = await api('/api/listings?filter=posted&per=30'); }
+  catch (e) { return fail(body, 'Не удалось загрузить историю: ' + e.message); }
+  const rows = d.items || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td class="nolabel" colspan="4"><div class="empty" style="margin:8px 0">' +
+      'Опубликованных постов пока нет</div></td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(a => '<tr>' +
+    '<td class="dtc" data-label="Когда">' + dt(a.posted_at) + '</td>' +
+    '<td class="nolabel" style="max-width:420px"><a class="t1" href="' + (a.url || '#') +
+      '" target="_blank" rel="noopener">' + esc(a.title) + '</a>' +
+      '<div class="t2">' + dash(a.price) + ' · ' + esc(a.location || '') + '</div></td>' +
+    '<td data-label="Пост в VK">' + (a.vk_post_url
+      ? '<a class="mono" style="color:var(--accent);font-size:13px" href="' + esc(a.vk_post_url) +
+        '" target="_blank" rel="noopener">' + esc(String(a.vk_post_url).replace(/^https:\/\/vk\.com\//, '')) + '</a>'
+      : '<span class="t2">ссылка не записана</span>') + '</td>' +
+    '<td class="num" data-label="Фото">' + fmt((a.photo_urls || []).length) + '</td></tr>').join('');
+}
+$('btnVkCheck').addEventListener('click', async () => {
+  statusMsg('Проверяем ключ и сообщество…');
+  try { await api('/api/vk?refresh=1'); await loadState(); await vkLoad(); statusMsg('Проверено', 'ok'); }
+  catch (e) { statusMsg('Ошибка: ' + e.message, 'err'); }
+});
+$('btnPvRefresh').addEventListener('click', () => vkPreview());
+$('btnVkPublish').addEventListener('click', () =>
+  startJob('/vk/publish', {}, 'Постинг очереди запущен…'));
+window.afterJob = () => { loadState().then(() => vkLoad()).catch(() => {}); };
+window.pageTick = () => { if (!app.running) loadState().then(() => vkLoad()).catch(() => {}); };
+document.addEventListener('DOMContentLoaded', () => loadState().then(() => vkLoad()).catch(() => {}));
+"""
+
+# --------------------------------------------------------------------- #
+# раздел: задачи
+# --------------------------------------------------------------------- #
+JOBS_PAGE = r"""
+    <section class="page">
+      <div class="titlerow">
+        <div>
+          <h1>Задачи</h1>
+          <p class="sub">Журнал фонового парсинга и постинга за текущий запуск сервера:
+            параметры, прогресс, лог и объявления каждой задачи.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnParseAll2">Спарсить всё</button>
+          <button class="btn primary" id="btnPublish2">Постить очередь</button>
+        </div>
+      </div>
+      <div class="card flush">
+        <div class="tablewrap">
+          <table>
+            <thead><tr>
+              <th>Начало</th><th>Тип</th><th>Статус</th><th>Прогресс</th>
+              <th>Итог</th><th class="num">Секунд</th><th>Лог</th>
+            </tr></thead>
+            <tbody id="jobsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+"""
+JOBS_SCRIPT = r"""
+/* ---------- задачи: детали раскрываются строкой под задачей ---------- */
+const JOB_STATUS = {done: ['ok', 'готово'], running: ['acc', 'выполняется'],
+  error: ['bad', 'ошибка'], queued: ['off', 'в очереди']};
+const jobCache = {};
+let openJobId = new URLSearchParams(location.search).get('job') || '';
+
+function jobLogRow(job){
+  const lines = (job.log || []).slice(-40);
+  const ads = (job.ads || []).map(a => typeof a === 'object' ? a : {avito_id: a});
+  return '<tr class="logtr"><td class="nolabel" colspan="7">' +
+    '<div class="joblog">' + (lines.length ? esc(lines.join('\n')) : 'лог пуст') + '</div>' +
+    ((job.sources || []).length ? '<div class="t2" style="margin-top:8px">источники: ' +
+      job.sources.map(s => esc(s.label || s.url) + (s.status ? ' (' + esc(s.status) + ')' : '')).join(', ') +
+      '</div>' : '') +
+    (ads.length ? '<div class="t2" style="margin-top:6px">объявления задачи: ' +
+      ads.slice(0, 40).map(a => '<a class="mono" href="/ads?q=' + encodeURIComponent(a.avito_id || '') +
+        '">' + esc(a.avito_id) + '</a>').join(', ') + (ads.length > 40 ? ' …' : '') + '</div>' : '') +
+    ((job.posts || []).length ? '<div class="t2" style="margin-top:6px">' +
+      job.posts.map(p => p.ok
+        ? '<a href="' + (p.post_url || '#') + '" target="_blank" rel="noopener">пост ' + esc(p.avito_id) +
+          '</a> · фото ' + fmt(p.photos) + ' · ' + fmt(p.chars) + ' симв.' +
+          (p.dry_run ? ' (dry-run)' : '')
+        : '<span style="color:var(--negative)">ошибка ' + esc(p.avito_id) + ': ' +
+          esc(p.error || p.skipped || '') + '</span>'
+      ).join('<br>') + '</div>' : '') +
+    '</td></tr>';
+}
+async function jobsLoad(){
+  const body = $('jobsBody');
+  let d;
+  try { d = await api('/api/jobs'); }
+  catch (e) { return fail(body, 'Не удалось загрузить задачи: ' + e.message); }
+  const jobs = d.jobs || [];
+  if (!jobs.length) {
+    body.innerHTML = '<tr><td class="nolabel" colspan="7"><div class="empty" style="margin:8px 0">' +
+      'Задач ещё не было</div></td></tr>';
+    return;
+  }
+  let html = '';
+  for (const j of jobs) {
+    const st = JOB_STATUS[j.status] || ['off', j.status];
+    html += '<tr data-job="' + esc(j.id) + '">' +
+      '<td class="dtc" data-label="Начало">' + tm(j.created_at) + '</td>' +
+      '<td data-label="Тип">' + esc(j.kind) + '</td>' +
+      '<td data-label="Статус">' + pill(st[0], st[1]) + '</td>' +
+      '<td data-label="Прогресс"><span class="t2">' + dash(j.progress) + '</span></td>' +
+      '<td data-label="Итог"><span class="t2" style="' + (j.status === 'error' ? 'color:var(--negative)' : '') +
+        '">' + dash(j.error || j.summary) + '</span></td>' +
+      '<td class="num" data-label="Секунд">' + (j.elapsed != null ? fmt(Math.round(j.elapsed)) : '—') + '</td>' +
+      '<td data-label="Лог"><button class="btn txt" data-toggle="' + esc(j.id) + '">' +
+        (j.id === openJobId ? 'скрыть' : 'показать') + '</button></td></tr>';
+    if (j.id === openJobId) {
+      let full = j;
+      try { full = await api('/job/' + j.id); } catch (e) {}
+      jobCache[j.id] = full;
+      html += jobLogRow(full);
+    }
+  }
+  body.innerHTML = html;
+  body.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', async () => {
+    const id = b.dataset.toggle;
+    const row = b.closest('tr');
+    if (openJobId === id) {
+      openJobId = ''; linkTo({job: null});
+      const next = row.nextElementSibling;
+      if (next && next.classList.contains('logtr')) next.remove();
+      b.textContent = 'показать';
+      return;
+    }
+    openJobId = id; linkTo({job: id});
+    statusMsg('Загружаем лог задачи ' + id + '…');
+    let full;
+    try { full = await api('/job/' + id); }
+    catch (e) { statusMsg('Ошибка: ' + e.message, 'err'); return; }
+    jobCache[id] = full;
+    const existing = row.nextElementSibling;
+    if (existing && existing.classList.contains('logtr')) existing.remove();
+    row.insertAdjacentHTML('afterend', jobLogRow(full));
+    body.querySelectorAll('[data-toggle]').forEach(x => { x.textContent = 'показать'; });
+    b.textContent = 'скрыть';
+    statusMsg('Готово', 'ok');
+  }));
+}
+$('btnParseAll2').addEventListener('click', () =>
+  startJob('/parse', {use_sources: true}, 'Парсинг всех активных запущен…'));
+$('btnPublish2').addEventListener('click', () =>
+  startJob('/vk/publish', {}, 'Постинг очереди запущен…'));
+window.afterJob = () => { jobsLoad().catch(() => {}); };
+window.pageTick = () => { jobsLoad().catch(() => {}); };
+document.addEventListener('DOMContentLoaded', () => jobsLoad().catch(() => {}));
+"""
+
+# --------------------------------------------------------------------- #
+# раздел: логи
+# --------------------------------------------------------------------- #
+LOGS_PAGE = r"""
+    <section class="page">
+      <div class="titlerow">
+        <div>
+          <h1>Логи</h1>
+          <p class="sub">Хвост файла лога сервера (<span class="mono">logs/avito_parser.log</span>).
+            Открывается на нужной странице, поэтому автообновление можно выключить и перечитать
+            файл целиком.</p>
+        </div>
+        <div class="actions">
+          <label class="switch"><input type="checkbox" id="logAuto" checked><span class="track"></span>Автообновление</label>
+          <button class="btn" id="btnLogRefresh">Перечитать</button>
+          <a class="btn primary" href="/api/logs?download=1">Скачать лог</a>
+        </div>
+      </div>
+      <div class="logbox" id="logbox">Читаем лог…</div>
+    </section>
+"""
+LOGS_SCRIPT = r"""
+/* ---------- логи: читаем хвост, автообновление отключаемо ---------- */
+async function logsLoad(){
+  const box = $('logbox');
+  try {
+    const d = await api('/api/logs?tail=2000');
+    const text = (d.lines || []).join('\n');
+    box.textContent = d.exists ? (text || 'лог пуст') : ('лог-файл ещё не создан: ' + (d.path || ''));
+    /* автоскролл вниз только если пользователь и так у конца — не перебиваем чтение */
+    if (box.scrollHeight - box.scrollTop - box.clientHeight < 80) box.scrollTop = box.scrollHeight;
+    $('stamp').textContent = 'лог обновлён ' + tm(new Date().toISOString());
+  } catch (e) { fail(box, 'Не удалось прочитать лог: ' + e.message); }
+}
+$('btnLogRefresh').addEventListener('click', () => logsLoad());
+$('logAuto').addEventListener('change', (e) => {
+  if (app.logTimer) { clearInterval(app.logTimer); app.logTimer = null; }
+  if (e.target.checked) app.logTimer = setInterval(() => logsLoad(), 5000);
+  statusMsg(e.target.checked ? 'Автообновление включено' : 'Автообновление выключено', 'ok');
+});
+window.pageTick = () => { if ($('logAuto').checked) logsLoad().catch(() => {}); };
+document.addEventListener('DOMContentLoaded', () => {
+  logsLoad().catch(() => {});
+  app.logTimer = setInterval(() => logsLoad(), 5000);
+});
+"""
+
+# --------------------------------------------------------------------- #
+# раздел: настройки
+# --------------------------------------------------------------------- #
+SETTINGS_PAGE = r"""
+    <section class="page">
+      <div class="titlerow">
+        <div>
+          <h1>Настройки</h1>
+          <p class="sub">Значения хранятся в базе и перекрывают <span class="mono">.env</span>:
+            приоритет БД → окружение → код. Пустые поля возвращаются к значениям из <span class="mono">.env</span>.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnAdvanced" aria-expanded="false">Дополнительные параметры</button>
+          <button class="btn primary" id="btnSaveSettings">Сохранить</button>
+        </div>
+      </div>
+
+      <div class="srow srule">
+        <div class="slabel">
+          <h3>Расписание</h3>
+          <p>Фоновый обход источников и постинг. Пауза останавливает крон, но кнопки в админке продолжают работать.</p>
+        </div>
+        <div class="spanel">
+          <div class="frow">
+            <label class="field"><span>Парсинг, минут</span>
+              <input type="number" id="s_parse" min="1" max="1440"></label>
+            <label class="field"><span>Постинг, минут</span>
+              <input type="number" id="s_publish" min="1" max="1440"></label>
+          </div>
+          <label class="switch"><input type="checkbox" id="s_paused"><span class="track"></span>
+            Поставить крон на паузу</label>
+        </div>
+      </div>
+
+      <div class="srow srule">
+        <div class="slabel">
+          <h3>Парсинг</h3>
+          <p>Сколько карточек забирать с одной выдачи и что с ними делать дальше.</p>
+        </div>
+        <div class="spanel">
+          <div class="frow">
+            <label class="field"><span>Лимит объявления за пуск</span>
+              <input type="number" id="s_frl" min="1" max="200">
+              <small>для источника, который парсится впервые</small></label>
+            <label class="field"><span>Страниц выдачи на источник</span>
+              <input type="number" id="s_pages" min="1" max="30"></label>
+          </div>
+          <div class="switchrow">
+            <div class="tw"><b>Открывать карточки</b><small>полное описание и фотографии с каждой страницы объявления</small></div>
+            <label class="switch"><input type="checkbox" id="s_details"><span class="track"></span></label>
+          </div>
+          <div class="switchrow">
+            <div class="tw"><b>Скачивать фото</b><small>сохранять снимки в <span class="mono">data/photos</span> для вложений в пост</small></div>
+            <label class="switch"><input type="checkbox" id="s_photos"><span class="track"></span></label>
+          </div>
+          <div class="card" id="proxyCard" style="box-shadow:none">
+            <div class="cardhead" style="padding:0 0 10px;border-bottom:0">
+              <h3 style="font-size:14px">Прокси</h3><span id="proxyPill"></span>
+            </div>
+            <div id="proxyBody" class="t2">статус прокси не загружен</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="srow srule">
+        <div class="slabel">
+          <h3>VK</h3>
+          <p>Сообщество и ограничения публикации. Ключ — в дополнительных параметрах или в <span class="mono">.env</span>.</p>
+        </div>
+        <div class="spanel">
+          <label class="field"><span>Сообщество (id или screen_name)</span>
+            <input type="text" id="s_vkgroup" placeholder="vk.com/club12345678">
+            <small id="s_vkgroup_hint">определится автоматически при проверке прав</small></label>
+          <div class="frow">
+            <label class="field"><span>Максимум фото в посте</span>
+              <input type="number" id="s_vkmax" min="0" max="10"></label>
+            <label class="field"><span>Минимальная пауза между постами, сек</span>
+              <input type="number" id="s_vkmin" min="0" max="3600">
+              <small>защита от лимита 902; 0 — выключить</small></label>
+          </div>
+          <div class="switchrow">
+            <div class="tw"><b>Постить только с фото</b><small>объявление без снимков остаётся в очереди</small></div>
+            <label class="switch"><input type="checkbox" id="s_reqphotos"><span class="track"></span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="srow srule">
+        <div class="slabel">
+          <h3>Публикация</h3>
+          <p>Сколько объявлений уходит за один запуск крона или кнопки «Постить очередь».</p>
+        </div>
+        <div class="spanel">
+          <label class="field" style="max-width:220px"><span>Объявлений за запуск</span>
+            <input type="number" id="s_batch" min="1" max="100"></label>
+        </div>
+      </div>
+
+      <div class="srow srule" id="advRow" hidden>
+        <div class="slabel">
+          <h3>Ключ доступа</h3>
+          <p>Токен хранится в базе, поэтому его видно здесь один раз и только по запросу.
+            Для фотографий на стене нужен ключ пользователя, полученный через standalone OAuth.</p>
+        </div>
+        <div class="spanel">
+          <label class="field"><span>VK access token</span>
+            <input type="password" id="s_vktoken" placeholder="вставьте новый ключ, чтобы заменить текущий" autocomplete="off"></label>
+          <div class="t2" id="s_vktoken_state">—</div>
+          <div class="t2" id="s_appid_state">—</div>
+        </div>
+      </div>
+
+      <div class="sfoot">
+        <span class="saved" id="saveStamp"></span>
+        <button class="btn" id="btnReloadSettings">Откатить к сохранённому</button>
+        <button class="btn primary" id="btnSaveSettings2">Сохранить</button>
+      </div>
+    </section>
+"""
+SETTINGS_SCRIPT = r"""
+/* ---------- настройки: одна форма, значения из /api/state ---------- */
+const SETTING_FIELDS = {
+  parse_interval_min: ['#s_parse', 'num'],
+  publish_interval_min: ['#s_publish', 'num'],
+  cron_paused: ['#s_paused', 'bool'],
+  first_run_limit: ['#s_frl', 'num'],
+  pages_per_source: ['#s_pages', 'num'],
+  details_on: ['#s_details', 'bool'],
+  photos_on: ['#s_photos', 'bool'],
+  vk_group_id: ['#s_vkgroup', 'text'],
+  vk_max_photos_per_post: ['#s_vkmax', 'num'],
+  vk_min_interval_sec: ['#s_vkmin', 'num'],
+  vk_require_photos: ['#s_reqphotos', 'bool'],
+  publish_batch: ['#s_batch', 'num']
+};
+function setVal(sel, v){ const el = $(sel.slice(1)); if (el) el.value = v; }
+async function settingsLoad(){
+  let S;
+  try { S = await loadState(); } catch (e) { return statusMsg('Не удалось загрузить настройки: ' + e.message, 'err'); }
+  const st = S.settings || {};
+  Object.keys(SETTING_FIELDS).forEach(k => {
+    const sel = SETTING_FIELDS[k][0], kind = SETTING_FIELDS[k][1];
+    const el = $(sel.slice(1)); if (!el) return;
+    if (kind === 'bool') el.checked = String(st[k]) === '1' || st[k] === true;
+    else el.value = st[k] != null ? st[k] : '';
+  });
+  const vk = S.vk || {};
+  const mask = (S.settings || {}).vk_access_token_mask || '';
+  $('s_vktoken_state').innerHTML = vk.token_set
+    ? 'Текущий ключ: <b>' + esc(vk.token_kind || 'установлен') + '</b> · ' + esc(mask) +
+      (vk.can_upload_photos === false ? ' · фото на стену этим ключом загружать нельзя' : '') +
+      (vk.oauth_url ? ' · <a id="vkOauthLink" href="' + esc(vk.oauth_url) +
+        '" target="_blank" rel="noopener">ссылка авторизации</a>' : '')
+    : (vk.oauth_url ? 'Ключ не задан · <a id="vkOauthLink" href="' + esc(vk.oauth_url) +
+        '" target="_blank" rel="noopener">получить через OAuth</a>' : 'Ключ не задан');
+  $('s_appid_state').textContent = vk.app_id
+    ? 'ID standalone-приложения: ' + vk.app_id + ' (нужен для ссылки авторизации)'
+    : 'VK_APP_ID не задан — ссылка авторизации не строится';
+  settingsProxy();
+}
+async function settingsProxy(){
+  const box = $('proxyBody');
+  try {
+    const p = await api('/api/proxy');
+    const pool = (p.configured || []).length;
+    $('proxyPill').innerHTML = pool
+      ? (p.browser_alive ? pill('ok', 'браузер через прокси') : pill('acc', 'настроен'))
+      : pill('off', 'не настроен');
+    const rows = [
+      ['адресов в пуле', fmt(pool) + (p.allow_direct ? ' · допускается прямой IP' : ' · только прокси')],
+      ['здоровых', p.pool_healthy != null ? fmt(p.pool_healthy) + ' из ' + fmt(p.pool_total) : 'не проверялся'],
+      ['в карантине', (p.quarantined || []).length ? (p.quarantined || []).join(', ') : 'нет'],
+      ['текущий выход', p.current || (p.browser_alive ? 'прямой IP' : 'браузер не запущен')]
+    ];
+    box.innerHTML = rows.map(r => '<div class="kv" style="padding-left:0;padding-right:0">' +
+      '<span>' + r[0] + '</span><b class="mono">' + esc(r[1]) + '</b></div>').join('') +
+      '<div class="kv" style="padding-left:0;padding-right:0"><span>лог</span><b class="mono">' +
+      esc(p.log_path || '—') + '</b></div>';
+  } catch (e) { box.textContent = 'Статус прокси недоступен: ' + e.message; }
+}
+async function settingsSave(){
+  const st = app.S ? (app.S.settings || {}) : {};
+  const payload = {};
+  Object.keys(SETTING_FIELDS).forEach(k => {
+    const kind = SETTING_FIELDS[k][1];
+    const el = $(SETTING_FIELDS[k][0].slice(1)); if (!el) return;
+    if (kind === 'bool') payload[k] = el.checked ? '1' : '0';
+    else if (kind === 'num') payload[k] = el.value === '' ? '' : String(el.value);
+    else payload[k] = el.value.trim();
+  });
+  const token = $('s_vktoken').value.trim();
+  if (token) payload.vk_access_token = token;
+  statusMsg('Сохраняем настройки…');
+  try {
+    await post('/api/settings', payload);
+    $('s_vktoken').value = '';
+    $('saveStamp').textContent = 'сохранено ' + tm(new Date().toISOString());
+    statusMsg('Настройки сохранены', 'ok');
+    await loadState().catch(() => {});
+    settingsLoad();
+  } catch (e) { statusMsg('Ошибка: ' + e.message, 'err'); }
+}
+$('btnAdvanced').addEventListener('click', () => {
+  const row = $('advRow'), on = row.hidden;
+  row.hidden = !on;
+  $('btnAdvanced').setAttribute('aria-expanded', String(on));
+  if (on) $('s_vktoken').focus();
+});
+$('btnReloadSettings').addEventListener('click', () => { settingsLoad(); statusMsg('Значения перечитаны из базы', 'ok'); });
+$('btnSaveSettings').addEventListener('click', settingsSave);
+$('btnSaveSettings2').addEventListener('click', settingsSave);
+/* настройки специально не перезаписываются автообновлением: поля могут быть заполнены */
+document.addEventListener('DOMContentLoaded', () => settingsLoad().catch(() => {}));
+"""
+
+# --------------------------------------------------------------------- #
+# вход
+# --------------------------------------------------------------------- #
 LOGIN_PAGE = r"""<!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Вход — Админка Авито → VK</title>
+<title>Вход · Авито → VK</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+<script>
+try {
+  var t = localStorage.getItem('avito-theme');
+  if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  document.documentElement.dataset.theme = t;
+} catch (e) {}
+</script>
 <style>
-:root{--surface:#111111;--raised:#2a2a2a;--rule:#161616;--control:#444444;
-  --text:#ffffff;--muted:#b4b4b4;--faint:#949494;--accent:#4cb3f0;
-  --pill-negative-bg:#2c1a20;--pill-negative-ink:#e5566f;}
+:root{--frame:#eef2f6;--surface:#fff;--raised:#f4f6f8;--border:#e2e7eb;--control:#cdced1;
+  --ink:#131416;--muted:#5d5f60;--faint:#6b6b6b;--accent:#2f6f96;--negative:#c4242a;
+  --primary:#1d1f20;--primary-ink:#fff;--radius-card:8px;--radius-control:6px;--shadow-card:0 1px 2px rgba(19,20,22,.05)}
+html[data-theme=dark]{--frame:#131415;--surface:#1b1c1e;--raised:#232527;--border:#2a2c2e;--control:#4a4c4e;
+  --ink:#f2f3f4;--muted:#b4b4b4;--faint:#949494;--accent:#79a8cf;--negative:#e5566f;
+  --primary:#fff;--primary-ink:#131416;--shadow-card:0 1px 2px rgba(0,0,0,.3)}
 *{box-sizing:border-box}
-html{color-scheme:dark}
-body{margin:0; background:#000; color:var(--text);
-  font:14px/1.5 Inter,system-ui,'Segoe UI',Roboto,sans-serif;
-  display:flex; min-height:100vh; align-items:center; justify-content:center; padding:20px;}
-.box{background:var(--surface); border-radius:20px; padding:30px; width:380px; max-width:100%;}
-h1{font-size:20px; font-weight:600; margin:0; letter-spacing:-.01em;}
-.sub{color:var(--faint); font-size:13px; margin:8px 0 20px;}
-label{display:block; font-size:14px; font-weight:500; margin:0 0 8px;}
-input{width:100%; background:#000; color:var(--text); border:1px solid var(--control);
-  border-radius:12px; padding:11px 14px; font:14px Inter,system-ui,sans-serif; margin-bottom:14px;}
-input:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
-button{width:100%; background:#fff; color:#000; border:0; border-radius:999px;
-  padding:11px 18px; font:500 14px Inter,system-ui,sans-serif; cursor:pointer;}
-button:hover{background:#e6e6e6;}
-.err{color:var(--pill-negative-ink); background:var(--pill-negative-bg); border-radius:12px;
-  padding:10px 14px; font-size:13px; display:none; margin-bottom:14px;}
+html{color-scheme:light}html[data-theme=dark]{color-scheme:dark}
+body{margin:0;min-height:100vh;background:var(--frame);color:var(--ink);
+  font:400 14px/1.45 "IBM Plex Sans",Inter,system-ui,sans-serif;
+  display:flex;align-items:center;justify-content:center;padding:24px}
+.box{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  padding:32px;width:100%;max-width:384px;box-shadow:var(--shadow-card)}
+.brand{display:flex;align-items:center;gap:9px;margin-bottom:24px}
+.brand .name{font-size:15px;font-weight:600}
+.brand .scope{font-size:12px;color:var(--muted);margin-top:2px}
+h1{font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0 0 6px}
+.sub{color:var(--muted);margin:0 0 24px;font-size:14px}
+label{display:flex;flex-direction:column;gap:8px;font-size:14px;font-weight:500;margin-bottom:16px}
+input{background:var(--surface);color:var(--ink);border:1px solid var(--border);
+  border-radius:var(--radius-card);height:44px;padding:0 12px;font:400 14px "IBM Plex Sans",system-ui,sans-serif;width:100%}
+input::placeholder{color:var(--faint)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button{width:100%;height:40px;border-radius:var(--radius-control);border:1px solid var(--primary);
+  background:var(--primary);color:var(--primary-ink);font:500 14px "IBM Plex Sans",system-ui,sans-serif;
+  cursor:pointer;margin-top:8px}
+button:hover{opacity:.88}
+.err{display:none;background:#ffedea;color:#831c1e;border:1px solid #fde68a;border-radius:var(--radius-card);
+  padding:10px 12px;font-size:13px;margin-bottom:16px}
+html[data-theme=dark] .err{background:#2c1a20;color:#e5566f;border-color:#2c1a20}
+.err.show{display:block}
+.foot{margin-top:24px;font-size:12px;color:var(--muted);text-align:center}
 </style>
 </head>
 <body>
-<div class="box">
-  <h1>Авито → VK</h1>
-  <div class="sub">Админка парсера и постинга. Вход по логину и паролю из .env (ADMIN_USERNAME / ADMIN_PASSWORD)</div>
-  <div class="err" id="err">Неверный логин или пароль</div>
-  <form id="f">
-    <label for="u">Логин</label>
-    <input id="u" name="username" autocomplete="username" required>
-    <label for="p">Пароль</label>
-    <input id="p" name="password" type="password" autocomplete="current-password" required>
-    <button>Войти</button>
+  <form class="box" id="f" method="post" action="/login" autocomplete="on">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+        <rect x="1" y="3" width="12" height="16" rx="3" stroke="currentColor" stroke-width="1.5" opacity=".55"/>
+        <path d="M14.5 11h5.5M17.5 8l3 3-3 3" stroke="var(--accent)" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="7" cy="7.5" r="1.6" fill="var(--accent)"/>
+      </svg>
+      <div><div class="name">Авито → VK</div><div class="scope">парсер и автопостинг</div></div>
+    </div>
+    <h1>Вход в админку</h1>
+    <p class="sub">Доступ по логину из <span style="font-family:'IBM Plex Mono',monospace">.env</span>.</p>
+    <div class="err" id="err"></div>
+    <label>Логин<input name="username" id="u" autocomplete="username" placeholder="admin"></label>
+    <label>Пароль<input name="password" id="p" type="password" autocomplete="current-password" placeholder="••••••••"></label>
+    <button type="submit">Войти</button>
+    <div class="foot">Сессия подписывается ADMIN_SECRET и живёт в cookie.</div>
   </form>
-</div>
 <script>
-document.getElementById('f').addEventListener('submit', async (e) => {
+const f = document.getElementById('f'), err = document.getElementById('err');
+f.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const data = Object.fromEntries(new FormData(e.target).entries());
-  const res = await fetch('/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
-  if (res.ok) { location.href = '/'; return; }
-  document.getElementById('err').style.display = 'block';
+  err.classList.remove('show');
+  try {
+    const res = await fetch('/login', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({username: document.getElementById('u').value,
+                            password: document.getElementById('p').value})});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Неверный логин или пароль');
+    location.href = '/';
+  } catch (ex) { err.textContent = ex.message; err.classList.add('show'); }
 });
 </script>
 </body>
 </html>
 """
+
+# --------------------------------------------------------------------- #
+# сборка страниц
+# --------------------------------------------------------------------- #
+# url-путь -> (имя раздела, заголовок страницы, разметка, скрипт раздела)
+PAGES: dict = {
+    "/": ("dash", "Дашборд · Авито → VK", DASHBOARD_PAGE, DASHBOARD_SCRIPT),
+    "/ads": ("ads", "Объявления · Авито → VK", ADS_PAGE, ADS_SCRIPT),
+    "/sources": ("sources", "Источники · Авито → VK", SOURCES_PAGE, SOURCES_SCRIPT),
+    "/vk": ("vk", "VK-канал · Авито → VK", VK_PAGE, VK_SCRIPT),
+    "/jobs": ("jobs", "Задачи · Авито → VK", JOBS_PAGE, JOBS_SCRIPT),
+    "/logs": ("logs", "Логи · Авито → VK", LOGS_PAGE, LOGS_SCRIPT),
+    "/settings": ("settings", "Настройки · Авито → VK", SETTINGS_PAGE, SETTINGS_SCRIPT),
+}
+
+def render_page(route: str) -> str:
+    """Собрать страницу раздела по URL-пути ('/' == дашборд)."""
+    name, title, content, script = PAGES[route]
+    return (
+        LAYOUT_SHELL
+        .replace("@@TITLE@@", title)
+        .replace("@@PAGE@@", name)
+        .replace("@@CONTENT@@", content)
+        .replace("@@SCRIPT@@", script)
+    )
+
+
+def page_html(route: str) -> str:
+    """Готовый HTML страницы; '/' возвращает дашборд."""
+    return render_page(route if route in PAGES else "/")

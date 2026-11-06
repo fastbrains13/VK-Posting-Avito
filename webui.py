@@ -93,7 +93,7 @@ class AuthService:
 # --------------------------------------------------------------------- #
 # страницы (HTML вынесен в webui_page.py)
 # --------------------------------------------------------------------- #
-from webui_page import LOGIN_PAGE, PAGE  # noqa: E402
+from webui_page import LOGIN_PAGE, PAGES, page_html  # noqa: E402
 
 
 # --------------------------------------------------------------------- #
@@ -150,6 +150,37 @@ def tail_traceback(depth: int = 5) -> str:
     return "".join(lines).rstrip()
 
 
+def token_kind(token: str) -> str:
+    """Тип ключа VK по формату — от него зависит, даст ли API загрузить фото на стену."""
+    if not token:
+        return ""
+    if token.startswith("vk1.a."):
+        return "ключ пользователя (standalone)"
+    if token.startswith("vk1."):
+        return "ключ сервиса"
+    if token.startswith("group"):
+        return "ключ сообщества"
+    return "ключ пользователя (старый формат)" if len(token) == 34 else "неизвестный формат"
+
+
+def token_mask(token: str) -> str:
+    """Ключ наружу не отдаём: показываем только начало и конец."""
+    if not token:
+        return ""
+    if len(token) <= 12:
+        return f"…{len(token)} симв."
+    return f"{token[:6]}…{token[-4:]} ({len(token)} симв.)"
+
+
+def oauth_url(app_id: str) -> str:
+    """Ссылка на выдачу user-ключа standalone-приложения (нужен для фото на стене)."""
+    if not app_id:
+        return ""
+    return ("https://oauth.vk.com/authorize?client_id=" + app_id +
+            "&display=page&redirect_uri=https%3A%2F%2Foauth.vk.com%2Fblank.html" +
+            "&scope=photos%2Cwall%2Cgroups%2Coffline&response_type=token&v=5.199")
+
+
 class PublishService:
     """Постинг в сообщество VK: один клиент и одна очередь на все запросы."""
 
@@ -192,6 +223,27 @@ class PublishService:
                 self._group_checked_at = time.time()
             except VkError as exc:
                 info["error"] = str(exc)
+        return info
+
+    def channel_info(self, refresh: bool = False) -> dict:
+        """Полная сводка канала для страниц админки (один источник правды для /api/vk и /api/state)."""
+        if refresh:
+            self._group_checked_at = 0.0
+        self.apply_settings()
+        info = self.describe()
+        vk = self.config.vk
+        kind = token_kind(vk.access_token)
+        info["token_kind"] = kind
+        info["token_mask"] = token_mask(vk.access_token)
+        # ключ сообщества не умеет photos.getWallUploadServer (код 27) — см. AGENTS.md, п.6
+        info["can_upload_photos"] = bool(vk.access_token) and not kind.startswith("ключ сообщества")
+        info["app_id"] = vk.app_id
+        info["oauth_url"] = oauth_url(vk.app_id)
+        info["max_photos"] = vk.max_photos_per_post
+        info["delay_min"] = vk.min_interval_sec
+        info["download_photos"] = vk.download_missing_photos
+        info["disable_comments"] = vk.disable_comments
+        info["hashtags"] = vk.hashtags
         return info
 
     def publish(self, job: Job, dry_run: bool, limit: int) -> None:
@@ -611,12 +663,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._redirect("/login")
             return
 
-        if path == "/":
-            self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        if path in PAGES:
+            self._send(page_html(path).encode("utf-8"), "text/html; charset=utf-8")
             return
 
         if path == "/api/state":
             self._json(self._state())
+            return
+
+        if path == "/api/vk":
+            # ?refresh=1 — принудительно перепроверить сообщество и права
+            refresh = bool(parse_qs(parsed.query).get("refresh"))
+            self._json(self.publish.channel_info(refresh=refresh))
             return
 
         if path == "/api/listings":
@@ -641,10 +699,6 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/export.csv":
             self._export_csv(parse_qs(parsed.query))
-            return
-
-        if path == "/vk":
-            self._json(self.publish.describe())
             return
 
         if path.startswith("/job/"):
@@ -675,22 +729,22 @@ class Handler(BaseHTTPRequestHandler):
     def _state(self) -> dict:
         db = self.service.db
         recent = db.get_unposted(limit=8) or []
-        vk = self.publish.describe()
+        vk = self.publish.channel_info()
         settings = db.all_settings()
         # ключ не отдаём в браузер целиком — только маску для подсказки
         token = settings.pop("vk_access_token", "") or ""
         settings["vk_access_token_mask"] = token[:10] + "…" + token[-4:] if token else ""
+        jobs_live = sum(1 for job in list(self.service.jobs.values()) + list(self.publish.jobs.values())
+                        if job.status in ("queued", "running"))
         return {
             "db": db.stats(),
             "sources": db.source_summary(),
             "settings": settings,
             "scheduler": self.scheduler.state(),
-            "vk": {"pending": vk.get("pending"), "posted": vk.get("posted"),
-                   "group_name": vk.get("group_name"), "last_post_url": vk.get("last_post_url"),
-                   "error": vk.get("error"), "token_set": vk.get("token_set"),
-                   "require_photos": vk.get("require_photos"),
-                   "app_id": self.publish.config.vk.app_id},
+            "vk": vk,
+            "jobs_live": jobs_live,
             "recent": [self.service._public_ad(ad) for ad in recent],
+            "recent_posts": db.posted_ads(limit=6),
         }
 
     def _listings(self, q: dict) -> dict:

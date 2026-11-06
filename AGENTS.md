@@ -15,7 +15,7 @@
 ├── main.py                # CLI: парсинг + постинг (argparse, --watch)
 ├── publisher.py           # CLI: публикация из БД в VK (standalone)
 ├── webui.py               # Веб-админка (stdlib http.server + cron)
-├── webui_page.py          # HTML/CSS/JS интерфейса админки
+├── webui_page.py          # страницы админки: LAYOUT_SHELL + 7 страниц разделов + вход
 ├── requirements.txt       # selenium, requests, python-dotenv, schedule, Pillow
 ├── Dockerfile             # Debian + Python 3.12 + Chromium
 ├── docker-compose.yml     # сервис webui (порт 8000, volumes data/, logs/)
@@ -42,7 +42,7 @@
 2. **БД — `avito_parser/database.py`.** Миграции в `_migrate()`. `DEFAULT_SETTINGS` (строка 368) — дефолты настроек админки. Приоритет: БД > `.env` > код.
 3. **Webui — stdlib `http.server`.** Никаких Django/FastAPI. GET/POST в `Handler.do_GET` / `do_POST`. Роуты — `if path == ...` / `if route == ...`.
 4. **Фоновые задачи — `Job` в памяти.** `PublishService` и `ParseService` хранят `jobs: dict[str, Job]`. `SchedulerService` — цикл парсинг → постинг → сон.
-5. **`webui_page.py` — одна большая строка `PAGE` в Python.** Это HTML-шаблон. CSS inline в `<style>`, JS inline в `<script>`. Правки — через `edit_file` на подстроку.
+5. **`webui_page.py` — страницы, а не один SPA.** `LAYOUT_SHELL` (каркас: сайдбар + топбар + лист, CSS-токены обеих тем, общий JS) и по одному шаблону на раздел: `DASHBOARD_PAGE`, `ADS_PAGE`, `SOURCES_PAGE`, `VK_PAGE`, `JOBS_PAGE`, `LOGS_PAGE`, `SETTINGS_PAGE` + `LOGIN_PAGE`. Карта `PAGES: url → (имя, заголовок, разметка, скрипт)`, сборка — `page_html(route)`. Hash-роутинга нет: раздел — это URL, фильтры/поиск/страница живут в query-параметрах (`linkTo`). CSS inline в `<style>` каркаса, JS раздела — в `@@SCRIPT@@` слоте. Правки — через `edit_file` на подстроку.
 6. **VK-фото через community-токен невозможен (код 27).** `vk_publisher.py:288-296` — генерирует понятную ошибку. Для фото нужен user-ключ standalone-приложения (OAuth).
 7. **Не удаляйте `.env` при деплое.** Скрипты деплоя должны делать бэкап перед перезаписью.
 8. **Docker не копирует `.env` (`.dockerignore`).** Передаётся через `env_file: .env`.
@@ -88,10 +88,12 @@ Config.load() → Config(
 **GET роуты:**
 | Путь | Описание |
 |---|---|
-| `/` | страница админки (PAGE) |
+| `/` | страница дашборда |
+| `/ads` `/sources` `/vk` `/jobs` `/logs` `/settings` | страницы разделов (`page_html(path)`) |
 | `/login` | форма входа |
 | `/logout` | сброс cookie |
-| `/api/state` | полное состояние (vk, scheduler, db, sources, settings, recent) |
+| `/api/state` | полное состояние (vk, scheduler, db, sources, settings, recent, recent_posts, jobs_live) |
+| `/api/vk` | описание VK-канала (`PublishService.channel_info`), `?refresh=1` — перепроверить сообщество |
 | `/api/listings` | объявления (flt, q, page, per) + counts |
 | `/api/jobs` | журнал задач |
 | `/api/logs` | хост лога + хвост строк |
@@ -105,7 +107,6 @@ Config.load() → Config(
 | `/photo` | отдача скачанного фото |
 | `/job/<id>` | статус задачи, прогресс, лог (40 последних строк), ads, posts |
 | `/job/<id>/raw` | то же + params, sources, proxy_used |
-| `/vk` | описание VK-канала (JSON: токен, сообщество, очередь) |
 
 **POST роуты:**
 | Путь | Описание |
@@ -120,6 +121,20 @@ Config.load() → Config(
 - `--no-headless` — показывать окно браузера
 - `--no-auth` — без входа (отладка)
 - `--no-cron` — без фоновых задач
+
+### `webui_page.py`
+
+**Каркас и страницы:**
+- `LAYOUT_SHELL` — сайдбар (`#side`, sticky) + топбар (`#topbar`: крошки, `#stamp`, `#vkSwitch`, `#themeBtn`, `#burger`) + лист (`#main.sheet`), CSS-токены `light`/`dark` в `<style>`, общий JS (`api`, `post`, `statusMsg`, `pill`, `startJob`/`pollJob`, `linkTo`, `imgFallback`, `initShell`)
+- `<РАЗДЕЛ>_PAGE` + `<РАЗДЕЛ>_SCRIPT` — разметка и JS одного раздела; `PAGES` — карта `url → (имя, title, разметка, скрипт)`
+- `render_page(route)` / `page_html(route)` — подстановка `@@TITLE@@`, `@@PAGE@@`, `@@CONTENT@@`, `@@SCRIPT@@`
+- `LOGIN_PAGE` — самодостаточная страница входа (свой минимальный CSS, общий каркас не тянет)
+
+**Правила разметки:**
+- переход между разделами — только обычные `<a href="/ads">`; никаких hash-роутов
+- состояние фильтров — query-параметры (`?filter=pending&q=...&page=2&job=...`), читаются при старте страницы
+- глобальные `#status` и `#joblog` живут в каркасе, вне `.page`
+- разметка раздела инкрементальна: блок не готов → `.skel`, ошибка → `.errline` с кнопкой повтора внутри блока
 
 ### `vk_publisher.py`
 
@@ -193,7 +208,7 @@ docker compose up --build
 
 - **Русские комментарии и docstrings.** Сообщения об ошибках — на русском.
 - **Типизация.** `def foo(x: int) -> str:` — везде.
-- **Файлы не длинные.** `webui.py` ~1040 строк, `webui_page.py` ~1170 строк, `scraper.py` ~946 строк, `vk_publisher.py` ~679 строк.
+- **Файлы не длинные.** `webui.py` ~1120 строк, `webui_page.py` ~1830 строк (каркас + 7 страниц, дальше дробить по разделам), `scraper.py` ~946 строк, `vk_publisher.py` ~679 строк.
 - **Нет фреймворков.** Только stdlib + selenium + requests.
 - **Без внешних секретов.** `.env` в `.gitignore`. `ADMIN_SECRET` — HMAC-подпись сессий.
 - **Без `print` в продакшене.** Логирование через `get_logger("avito.<модуль>")` — неймспейсы: `avito.db`, `avito.scraper`, `avito.browser`, `avito.human`, `avito.photos`, `avito.vk`, `avito.webui`, `avito.main`, `avito.export`.
@@ -204,13 +219,18 @@ docker compose up --build
 1. `config.py` — добавить поле в нужный `@dataclass`
 2. `.env.example` — описание + дефолт
 3. `database.py DEFAULT_SETTINGS` — если перекрывается из админки
-4. `webui_page.py` — добавить поле в форму Настроек
+4. `webui_page.py` — поле в `SETTINGS_PAGE` (разметка) + ключ в `SETTING_FIELDS` (загрузка/сборка формы)
 5. `webui.py` — добавить в `_handle_settings` `allowed` set
+
+### Добавить раздел (страницу)
+1. `webui_page.py` — `НОВЫЙ_PAGE` + `НОВЫЙ_SCRIPT`, запись в `PAGES["/новый"]`
+2. `webui.py` — ничего: `do_GET` отдаёт всё из `PAGES`; при необходимости добавить JSON-эндпоинт
+3. `LAYOUT_SHELL` — пункт сайдбара (`data-nav`) и подпись в `PAGE_TITLES`
 
 ### Добавить API-эндпоинт в админку
 1. `webui.py` — `do_GET`: `if path == "/api/new": self._json(...)`
 2. `webui.py` — `do_POST`: `if route == "/api/new": ...`
-3. `webui_page.py` — добавить вызов `api('/api/new')` в JS
+3. `webui_page.py` — добавить вызов `api('/api/new')` в JS нужного раздела
 
 ### Отладка webui
 ```bash
